@@ -1,0 +1,6 @@
+* text=auto
+*.cfg  text eol=crlf
+*.vtest text eol=crlf
+*.exe  binary
+*.zip  binary
+*.png  binary
