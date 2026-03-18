@@ -1,13 +1,24 @@
 """
 tools/gen/timers.py — generates cfg/jiting/mode/<mode>.cfg
 
-Each generated file contains all timer alias chains for one JT_MODE:
-  - Direction timers (fwd/back/left/right) × 2 variants (v1/v2)
-  - Transition timers (f2b/b2f/l2r/r2l) initial chain
-  - Mode init aliases (called by jt_mode_N in settings.cfg)
+Two-stage counter-strafe mechanism (matches original logic):
+
+  Stage 1 — Direction timer (tmr_fwd_v1_N), advances while key is HELD:
+    At threshold frames, calls stop_arm_fb_N which ARMS the corresponding
+    stop hook (stop_fb_N) by pointing it at stop_fb_action.
+
+  Stage 2 — Transition timer (tmr_f2b_N), starts when key is RELEASED:
+    Calls stop_fb_0 … stop_fb_4 in sequence each tick.
+    Only armed hooks fire; unarmed hooks are no-ops.
+    stop_fb_action is redefined by ground.cfg / air.cfg to control
+    whether lateral key releases counter-strafe or just stop.
+
+This design separates:
+  - WHEN to counter-strafe (timer thresholds — data in modes_data.py)
+  - HOW to counter-strafe (ground.cfg vs air.cfg)
 
 Run:  python tools/gen/timers.py
-Output: cfg/jiting/mode/m1.cfg, m1_5.cfg, m2.cfg, m3.cfg, m4.cfg, m5.cfg, m6.cfg
+Output: cfg/jiting/mode/m1.cfg … m6.cfg
 """
 
 from __future__ import annotations
@@ -16,57 +27,54 @@ from modes_data import MODES, DIRECTIONS, DIR_LABELS, TRANSITIONS
 
 OUT_DIR = Path(__file__).parent.parent.parent / "cfg" / "jiting" / "mode"
 
-STOP_HOOK_NAMES = ["stop_0", "stop_1", "stop_2", "stop_3", "stop_4"]
+NUM_STOP_LEVELS = 5   # stop_N levels: 0..4
+
+
+def _axis_pair(direction: str) -> str:
+    """Return 'fb' or 'lr' for a given direction."""
+    return "fb" if direction in ("fwd", "back") else "lr"
 
 
 def gen_dir_timer(
     direction: str,
-    variant: int,         # 1 = initial press, 2 = direction-change
+    variant: int,
     thresholds: list[int],
     cycle_len: int,
 ) -> str:
     """
-    Generate a direction timer alias chain.
-
-    The chain advances once per &k tick (every 6 game frames).
-    At threshold frames, a stop_N hook alias is called.
-    At cycle_len, the chain resets and disarms itself.
-
-    Naming: tmr_{dir}_v{variant}_{N}
+    Stage 1: direction timer.
+    Advances every &k tick (every 6 game frames) while the key is held.
+    At threshold frames, calls stop_arm_<axis>_N to arm the stop hook.
     """
     prefix = f"tmr_{direction}_v{variant}"
-    init_alias = f"tmr_{direction}_v{variant}_init"
-    tick_alias = f"tmr_{direction}_tick"
+    arm_alias = f"tmr_{direction}_arm"
+    axis = _axis_pair(direction)
 
-    # map frame → stop hook level
-    frame_to_hook: dict[int, int] = {}
-    for level, frame in enumerate(thresholds):
-        frame_to_hook[frame] = level
+    # frame index → stop level
+    frame_to_level: dict[int, int] = {f: i for i, f in enumerate(thresholds)}
 
-    lines: list[str] = [
-        f"// Direction timer — {DIR_LABELS[direction]}, variant {variant}",
-        f"// Advances every 6 game frames. Thresholds: {thresholds}",
+    lines = [
+        f"// --- Direction timer: {DIR_LABELS[direction]}, variant {variant} ---",
+        f"// Thresholds (frame → stop level): {dict(sorted(frame_to_level.items()))}",
     ]
 
     for n in range(1, cycle_len + 1):
         next_n = (n % cycle_len) + 1
-        parts: list[str] = [f"alias {tick_alias} {prefix}_{next_n}"]
+        parts: list[str] = [f"alias {arm_alias} {prefix}_{next_n}"]
 
-        if n in frame_to_hook:
-            level = frame_to_hook[n]
-            parts.append(f"stop_{level}")
+        if n in frame_to_level:
+            level = frame_to_level[n]
+            parts.append(f"stop_arm_{axis}_{level}")   # arm the stop hook
 
         if n == cycle_len:
-            # last frame: disarm the tick starter
-            parts.append(f"alias tmr_{direction}_arm")
+            parts.append(f"alias {arm_alias}")          # disarm ticker at end
 
-        body = ";".join(parts)
-        lines.append(f'alias {prefix}_{n} "{body}"')
+        lines.append(f'alias {prefix}_{n} "{";".join(parts)}"')
 
-    # Init alias: resets chain to frame 1 and arms the tick
+    # Init: reset to frame 1 and re-arm the ticker
     lines.append(
-        f'alias {init_alias} '
-        f'"alias {tick_alias} {prefix}_1;alias tmr_{direction}_arm {tick_alias}"'
+        f'alias tmr_{direction}_v{variant}_init '
+        f'"alias {arm_alias} {prefix}_1"'
     )
     lines.append("")
     return "\n".join(lines)
@@ -79,38 +87,68 @@ def gen_transition_timer(
     cycle_len: int,
 ) -> str:
     """
-    Generate a transition timer (e.g. f2b = forward→back).
-    Fires stop hooks on the *source* direction as the player
-    counter-strafes.
+    Stage 2: transition timer (e.g. f2b = forward→back).
+    Starts when the key is released / opposite pressed.
+    Fires stop_fb_0 … stop_fb_4 in sequence; only armed hooks do anything.
     """
-    name = f"tmr_{from_dir[0]}2{to_dir[0]}"   # e.g. tmr_f2b
-    tick_alias = f"{name}_tick"
+    axis = _axis_pair(from_dir)
+    name = f"tmr_{from_dir[0]}2{to_dir[0]}"  # e.g. tmr_f2b
+    arm_alias = f"{name}_arm"
 
-    frame_to_hook: dict[int, int] = {}
-    for level, frame in enumerate(thresholds):
-        frame_to_hook[frame] = level
-
-    lines: list[str] = [
-        f"// Transition timer — {from_dir} → {to_dir}",
+    lines = [
+        f"// --- Transition timer: {from_dir}→{to_dir} ---",
     ]
 
-    for n in range(1, cycle_len + 1):
-        next_n = (n % cycle_len) + 1
-        parts: list[str] = [f"alias {tick_alias} {name}_{next_n}"]
+    for n in range(1, NUM_STOP_LEVELS + 2):   # one state per stop level + reset state
+        next_n = (n % (NUM_STOP_LEVELS + 1)) + 1
+        parts: list[str] = [f"alias {arm_alias} {name}_{next_n}"]
 
-        if n in frame_to_hook:
-            level = frame_to_hook[n]
-            parts.append(f"stop_{level}")
+        if n <= NUM_STOP_LEVELS:
+            level = n - 1
+            parts.append(f"stop_{axis}_{level}")       # fire (no-op if not armed)
 
-        if n == cycle_len:
-            parts.append(f"alias {name}_arm")
+        if n == NUM_STOP_LEVELS + 1:
+            # Final state: reset all stop hooks for this axis, disarm
+            parts.append(f"stop_reset_{axis}")
+            parts.append(f"alias {arm_alias}")
+            parts.append(f"stop_cross_reset_{axis}")   # restore SOCD lateral routing
 
-        body = ";".join(parts)
-        lines.append(f'alias {name}_{n} "{body}"')
+        lines.append(f'alias {name}_{n} "{";".join(parts)}"')
 
     lines.append(
-        f'alias {name}_init '
-        f'"alias {tick_alias} {name}_1;alias {name}_arm {tick_alias}"'
+        f'alias {name}_init "alias {arm_alias} {name}_1"'
+    )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def gen_stop_hooks(axis: str) -> str:
+    """
+    Generate stop hook infrastructure for one axis ('fb' or 'lr').
+
+    stop_arm_<axis>_N  — called by direction timer to arm stop_<axis>_N
+    stop_<axis>_N      — called by transition timer; no-op until armed
+    stop_reset_<axis>  — clears all armed hooks back to no-op
+    stop_<axis>_action — defined by ground.cfg / air.cfg (context behaviour)
+    """
+    lines = [
+        f"// --- Stop hooks: {axis} axis ---",
+        f"// stop_{axis}_action is overridden by jiting/ground.cfg or jiting/air.cfg",
+        f"alias stop_{axis}_action",          # no-op until ground/air loaded
+        f"alias stop_cross_reset_{axis}",     # no-op until ground/air loaded
+    ]
+
+    reset_parts: list[str] = []
+    for level in range(NUM_STOP_LEVELS):
+        lines.append(f"alias stop_{axis}_{level}")           # no-op by default
+        lines.append(
+            f'alias stop_arm_{axis}_{level} '
+            f'"alias stop_{axis}_{level} stop_{axis}_action"'
+        )
+        reset_parts.append(f"alias stop_{axis}_{level}")    # reset to no-op
+
+    lines.append(
+        f'alias stop_reset_{axis} "{";".join(reset_parts)}"'
     )
     lines.append("")
     return "\n".join(lines)
@@ -129,26 +167,21 @@ def gen_mode_file(mode_key: str, mode: dict) -> str:
         f"// cycle_len={cycle_len}  v1={v1}  v2={v2}",
         f"// {'=' * 60}",
         "",
-        "// --- Stop hooks (no-op by default, overridden by air/ground state) ---",
+        gen_stop_hooks("fb"),
+        gen_stop_hooks("lr"),
     ]
 
-    for name in STOP_HOOK_NAMES:
-        sections.append(f"alias {name}")
-    sections.append("")
-
-    # Direction timers
     for direction in DIRECTIONS:
         sections.append(gen_dir_timer(direction, 1, v1, cycle_len))
         sections.append(gen_dir_timer(direction, 2, v2, cycle_len))
 
-    # Transition timers (use v1 thresholds as base)
     for from_dir, to_dir in TRANSITIONS:
         sections.append(gen_transition_timer(from_dir, to_dir, v1, cycle_len))
 
-    # Mode init alias — called by jt_mode_N in settings.cfg
+    # Mode activation alias
     sections += [
-        f"// --- Mode activation alias ---",
-        f'alias jt_mode_{mode_key} "exec <name>/jiting/mode/{mode_key}.cfg"',
+        "// --- Mode activation ---",
+        f'alias jt_mode_{mode_key} "exec nullify/jiting/mode/{mode_key}.cfg"',
         "",
     ]
 
