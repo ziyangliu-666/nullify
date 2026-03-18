@@ -14,6 +14,7 @@ export interface Settings {
   jiting: boolean;
   jiting_mode: string;
   bhop: boolean;
+  bhop_key: string;
   jumpbug: boolean;
   jump_throw: boolean;
   fwd_jump_throw: boolean;
@@ -30,6 +31,7 @@ export const DEFAULT_SETTINGS: Settings = {
   jiting: true,
   jiting_mode: "jt_mode_3",
   bhop: true,
+  bhop_key: "space",
   jumpbug: false,
   jump_throw: true,
   fwd_jump_throw: false,

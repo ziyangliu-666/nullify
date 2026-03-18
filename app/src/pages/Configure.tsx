@@ -12,15 +12,81 @@ export default function Configure() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
+  const didInitRef = useRef(false);
+  const saveSeqRef = useRef(0);
 
   const gameCfg = selectedUser?.game_cfg ?? null;
   const userdataCfg = selectedUser?.userdata_cfg ?? null;
+
+  function normalizeKey(k: string) {
+    return (k ?? "").trim().toLowerCase();
+  }
+
+  function getKeyConflicts(s: Settings): string[] {
+    const reservedFixed: Array<{ key: string; label: string }> = [
+      { key: "w", label: "W(前进)" },
+      { key: "a", label: "A(左)" },
+      { key: "s", label: "S(后退)" },
+      { key: "d", label: "D(右)" },
+      { key: "shift", label: "Shift(冲刺)" },
+      { key: "ctrl", label: "Ctrl(蹲下)" },
+      { key: "e", label: "E(使用)" },
+      { key: "g", label: "G(丢雷)" },
+      { key: "q", label: "Q(切换武器)" },
+      { key: "mouse1", label: "鼠标1(攻击)" },
+      { key: "mouse2", label: "鼠标2(副攻击)" },
+      { key: "1", label: "1(武器槽1)" },
+      { key: "2", label: "2(武器槽2)" },
+      { key: "3", label: "3(武器槽3)" },
+      { key: "4", label: "4(武器槽4)" },
+      { key: "5", label: "5(武器槽5)" },
+    ];
+
+    const featureKeys: Array<{ key: string; label: string; enabled: boolean }> = [
+      { key: s.bhop_key, label: "连跳(Bhop)", enabled: normalizeKey(s.bhop_key) !== "" },
+      { key: s.toggle_jiting_key, label: "急停开关", enabled: normalizeKey(s.toggle_jiting_key) !== "" },
+      { key: s.jump_throw_key, label: "跳投(Jump Throw)", enabled: normalizeKey(s.jump_throw_key) !== "" },
+      { key: s.fwd_jump_throw_key, label: "前跳投(Jump Throw Forward)", enabled: normalizeKey(s.fwd_jump_throw_key) !== "" },
+      { key: s.jumpbug_key, label: "大跳(Jumpbug)", enabled: normalizeKey(s.jumpbug_key) !== "" },
+    ];
+
+    const all = [
+      ...reservedFixed.map((r) => ({ key: r.key, name: r.label })),
+      ...featureKeys
+        .filter((f) => f.enabled)
+        .map((f) => ({ key: normalizeKey(f.key), name: f.label })),
+    ];
+
+    // Only treat conflicts among non-empty keys.
+    const keyToNames = new Map<string, string[]>();
+    for (const item of all) {
+      const k = normalizeKey(item.key);
+      if (!k) continue;
+      const arr = keyToNames.get(k) ?? [];
+      arr.push(item.name);
+      keyToNames.set(k, arr);
+    }
+
+    const conflicts: string[] = [];
+    for (const [k, names] of keyToNames.entries()) {
+      // If key appears in 2+ binds, it's a real conflict in the generated keys.cfg.
+      if (names.length >= 2) {
+        conflicts.push(`${k}: ${names.join(" / ")}`);
+      }
+    }
+    return conflicts;
+  }
 
   useEffect(() => {
     if (!gameCfg) {
       setLoading(false);
       return;
     }
+    // Reset the "skip first write" flag when switching users/cfg dirs.
+    didInitRef.current = false;
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+
     setLoading(true);
     invoke<Settings>("read_settings", { cfgDir: gameCfg, userdataCfg })
       .then((s) => setSettings(s))
@@ -28,16 +94,36 @@ export default function Configure() {
       .finally(() => setLoading(false));
   }, [gameCfg, userdataCfg]);
 
-  async function handleApply() {
+  async function saveSettings() {
     if (!gameCfg) return;
+
+    const conflicts = getKeyConflicts(settings);
+    if (conflicts.length > 0) {
+      setToast({ ok: false, msg: `键位冲突，已跳过保存：${conflicts[0]}` });
+      return;
+    }
+
     setSaving(true);
     setToast(null);
+    const seq = ++saveSeqRef.current;
+
     try {
-      await invoke("write_settings", { cfgDir: gameCfg, userdataCfg, settings });
-      setToast({ ok: true, msg: t("saved_ok") });
+      const steamRunning = await invoke<boolean>("write_settings", {
+        cfgDir: gameCfg,
+        userdataCfg,
+        settings,
+      });
+      // Ignore stale completions (if settings changed again during the request)
+      if (saveSeqRef.current !== seq) return;
+      setToast({
+        ok: true,
+        msg: steamRunning ? t("write_need_restart") : t("saved_ok"),
+      });
     } catch (e: unknown) {
+      if (saveSeqRef.current !== seq) return;
       setToast({ ok: false, msg: String(e) });
     } finally {
+      if (saveSeqRef.current !== seq) return;
       setSaving(false);
       setTimeout(() => setToast(null), 3000);
     }
@@ -46,6 +132,32 @@ export default function Configure() {
   function set<K extends keyof Settings>(key: K, value: Settings[K]) {
     setSettings((s) => ({ ...s, [key]: value }));
   }
+
+  // Auto-config: whenever settings change, write cfg files (debounced).
+  useEffect(() => {
+    if (!gameCfg) return;
+    if (loading) return;
+
+    // Skip the first write caused by initial settings hydration.
+    if (!didInitRef.current) {
+      didInitRef.current = true;
+      return;
+    }
+
+    if (getKeyConflicts(settings).length > 0) return;
+
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = window.setTimeout(() => {
+      void saveSettings();
+    }, 450);
+
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings, loading, gameCfg, userdataCfg]);
+
+  const keyConflicts = !loading ? getKeyConflicts(settings) : [];
 
   if (loading) {
     return (
@@ -106,34 +218,38 @@ export default function Configure() {
       <div className="section-card space-y-2.5">
         <SectionTitle>{t("features_title")}</SectionTitle>
 
-        <ToggleRow
+        {keyConflicts.length > 0 && (
+          <div className="text-cs-error text-sm font-semibold">
+            {`键位冲突（已暂停自动保存）`}
+          </div>
+        )}
+
+        <div className="text-[11px] text-cs-muted">
+          {`按 Esc 清空键位；不绑定则不起用。`}
+        </div>
+
+        <KeyBindRow
           label={t("bhop")}
           desc={t("bhop_desc")}
-          checked={settings.bhop}
-          onChange={(v) => set("bhop", v)}
+          value={settings.bhop_key}
+          onKeyChange={(v) => set("bhop_key", v)}
         />
-        <ToggleRow
+        <KeyBindRow
           label={t("jumpbug")}
           desc={t("jumpbug_desc")}
-          checked={settings.jumpbug}
-          onChange={(v) => set("jumpbug", v)}
-          keyValue={settings.jumpbug_key}
+          value={settings.jumpbug_key}
           onKeyChange={(v) => set("jumpbug_key", v)}
         />
-        <ToggleRow
+        <KeyBindRow
           label={t("jump_throw")}
           desc={t("jump_throw_desc")}
-          checked={settings.jump_throw}
-          onChange={(v) => set("jump_throw", v)}
-          keyValue={settings.jump_throw_key}
+          value={settings.jump_throw_key}
           onKeyChange={(v) => set("jump_throw_key", v)}
         />
-        <ToggleRow
+        <KeyBindRow
           label={t("fwd_jump_throw")}
           desc={t("fwd_jump_throw_desc")}
-          checked={settings.fwd_jump_throw}
-          onChange={(v) => set("fwd_jump_throw", v)}
-          keyValue={settings.fwd_jump_throw_key}
+          value={settings.fwd_jump_throw_key}
           onKeyChange={(v) => set("fwd_jump_throw_key", v)}
         />
       </div>
@@ -172,13 +288,7 @@ export default function Configure() {
 
       {/* Apply */}
       <div className="flex items-center gap-4 pb-2">
-        <button
-          className="btn-primary"
-          disabled={saving || !gameCfg}
-          onClick={handleApply}
-        >
-          {saving ? t("saving_btn") : t("apply_btn")}
-        </button>
+        {saving && <span className="text-sm text-cs-muted">{t("saving_btn")}</span>}
         {toast && (
           <span
             className={`text-sm ${toast.ok ? "text-cs-success" : "text-cs-error"}`}
@@ -200,6 +310,28 @@ function SectionTitle({ children }: { children: React.ReactNode }) {
   return (
     <div className="text-xs font-semibold uppercase tracking-widest text-cs-muted">
       {children}
+    </div>
+  );
+}
+
+function KeyBindRow({
+  label,
+  desc,
+  value,
+  onKeyChange,
+}: {
+  label: string;
+  desc?: string;
+  value: string;
+  onKeyChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-4">
+      <div className="min-w-0">
+        <div className="text-sm text-cs-text">{label}</div>
+        {desc && <div className="text-xs text-cs-muted truncate">{desc}</div>}
+      </div>
+      <KeyCapture value={value} onChange={onKeyChange} />
     </div>
   );
 }
@@ -292,6 +424,11 @@ function KeyCapture({
     function onKeyDown(e: KeyboardEvent) {
       e.preventDefault();
       e.stopPropagation();
+      if (e.key === "Escape") {
+        onChange("");
+        setListening(false);
+        return;
+      }
       const k = browserKeyToCS2(e);
       if (k === null) { setListening(false); return; }
       onChange(k);

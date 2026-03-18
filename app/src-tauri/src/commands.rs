@@ -24,6 +24,7 @@ pub struct Settings {
     pub jiting: bool,
     pub jiting_mode: String,
     pub bhop: bool,
+    pub bhop_key: String,
     pub jumpbug: bool,
     pub jump_throw: bool,
     pub fwd_jump_throw: bool,
@@ -42,6 +43,7 @@ impl Default for Settings {
             jiting: true,
             jiting_mode: "jt_mode_3".into(),
             bhop: true,
+            bhop_key: "space".into(),
             jumpbug: false,
             jump_throw: true,
             fwd_jump_throw: false,
@@ -621,7 +623,8 @@ pub fn read_settings(cfg_dir: String, userdata_cfg: Option<String>) -> Result<Se
     // Read key bindings from keys.cfg
     let keys_path = PathBuf::from(&cfg_dir).join("nullify/user/keys.cfg");
     if let Ok(keys_content) = fs::read_to_string(&keys_path) {
-        let (tk, jk, fjk, jbk) = parse_keys_cfg(&keys_content);
+        let (bk, tk, jk, fjk, jbk) = parse_keys_cfg(&keys_content);
+        if !bk.is_empty()  { s.bhop_key = bk; }
         if !tk.is_empty()  { s.toggle_jiting_key = tk; }
         if !jk.is_empty()  { s.jump_throw_key = jk; }
         if !fjk.is_empty() { s.fwd_jump_throw_key = fjk; }
@@ -701,7 +704,11 @@ fn extract_alias_cvar(line: &str, alias_name: &str, cvar_name: &str) -> Option<f
 }
 
 #[tauri::command]
-pub fn write_settings(cfg_dir: String, userdata_cfg: Option<String>, settings: Settings) -> Result<(), String> {
+pub fn write_settings(
+    cfg_dir: String,
+    userdata_cfg: Option<String>,
+    settings: Settings,
+) -> Result<bool, String> {
     let dir = PathBuf::from(&cfg_dir).join("nullify/user");
     fs::create_dir_all(&dir)
         .map_err(|e| format!("创建目录失败: {}", e))?;
@@ -722,7 +729,9 @@ pub fn write_settings(cfg_dir: String, userdata_cfg: Option<String>, settings: S
     fs::write(&keys_path, keys_content)
         .map_err(|e| format!("写入 keys.cfg 失败: {}", e))?;
 
-    Ok(())
+    // CFG changes are applied when CS2 starts (or when you exec again).
+    // We treat "Steam running" as a proxy for "CS2 likely running" and show a hint.
+    Ok(is_steam_running())
 }
 
 fn render_settings(s: &Settings) -> String {
@@ -742,10 +751,10 @@ fn render_settings(s: &Settings) -> String {
          {jiting_mode}\n\
          \n\
          // --- Features ---\n\
-         {bhop}\n\
-         {jumpbug}\n\
-         {jump_throw}\n\
-         {fwd_jump_throw}\n\
+        {bhop}\n\
+        {jumpbug}\n\
+        {jump_throw}\n\
+        {fwd_jump_throw}\n\
          \n\
          // --- Sensitivity ---\n\
          alias usr_sensitivity        \"sensitivity {sensitivity}\"\n\
@@ -765,14 +774,11 @@ fn render_settings(s: &Settings) -> String {
          alias hud_jiting_off \"cl_hud_color 4\"\n",
         jiting = if s.jiting { "open_jiting" } else { "close_jiting" },
         jiting_mode = s.jiting_mode,
-        bhop = if s.bhop { "open_bhop" } else { "close_bhop" },
-        jumpbug = if s.jumpbug { "open_jumpbug" } else { "close_jumpbug" },
-        jump_throw = if s.jump_throw { "open_jump_throw" } else { "close_jump_throw" },
-        fwd_jump_throw = if s.fwd_jump_throw {
-            "open_fwd_jump_throw"
-        } else {
-            "close_fwd_jump_throw"
-        },
+        // Feature enable semantics: "bound key exists" => enabled; empty key => disabled.
+        bhop = if !s.bhop_key.trim().is_empty() { "open_bhop" } else { "close_bhop" },
+        jumpbug = if !s.jumpbug_key.trim().is_empty() { "open_jumpbug" } else { "close_jumpbug" },
+        jump_throw = if !s.jump_throw_key.trim().is_empty() { "open_jump_throw" } else { "close_jump_throw" },
+        fwd_jump_throw = if !s.fwd_jump_throw_key.trim().is_empty() { "open_fwd_jump_throw" } else { "close_fwd_jump_throw" },
         sensitivity = s.sensitivity,
         m_yaw = s.m_yaw,
         m_pitch = s.m_pitch,
@@ -782,9 +788,10 @@ fn render_settings(s: &Settings) -> String {
 
 // ─── Keys CFG ─────────────────────────────────────────────────────────────────
 
-/// Extract the 4 configurable key bindings from keys.cfg.
-/// Returns (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key).
-fn parse_keys_cfg(content: &str) -> (String, String, String, String) {
+/// Extract the configurable key bindings from keys.cfg.
+/// Returns (bhop_key, toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key).
+fn parse_keys_cfg(content: &str) -> (String, String, String, String, String) {
+    let mut bhop_key = String::new();
     let mut toggle_jiting_key = String::new();
     let mut jump_throw_key = String::new();
     let mut fwd_jump_throw_key = String::new();
@@ -812,6 +819,7 @@ fn parse_keys_cfg(content: &str) -> (String, String, String, String) {
         };
 
         match cmd {
+            "+if_jump"           => bhop_key = key.to_lowercase(),
             "toggle_jiting"      => toggle_jiting_key = key.to_lowercase(),
             "+if_jump_throw"     => jump_throw_key = key.to_lowercase(),
             "+if_fwd_jump_throw" => fwd_jump_throw_key = key.to_lowercase(),
@@ -820,10 +828,40 @@ fn parse_keys_cfg(content: &str) -> (String, String, String, String) {
         }
     }
 
-    (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key)
+    (bhop_key, toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key)
 }
 
 fn render_keys_cfg(s: &Settings) -> String {
+    let bhop_bind = if !s.bhop_key.trim().is_empty() {
+        format!("bind {} \"+if_jump\"\n", s.bhop_key)
+    } else {
+        String::new()
+    };
+
+    let toggle_jiting_bind = if !s.toggle_jiting_key.trim().is_empty() {
+        format!("bind {} \"toggle_jiting\"\n", s.toggle_jiting_key)
+    } else {
+        String::new()
+    };
+
+    let jump_throw_bind = if !s.jump_throw_key.trim().is_empty() {
+        format!("bind {} \"+if_jump_throw\"\n", s.jump_throw_key)
+    } else {
+        String::new()
+    };
+
+    let fwd_jump_throw_bind = if !s.fwd_jump_throw_key.trim().is_empty() {
+        format!("bind {} \"+if_fwd_jump_throw\"\n", s.fwd_jump_throw_key)
+    } else {
+        String::new()
+    };
+
+    let jumpbug_bind = if !s.jumpbug_key.trim().is_empty() {
+        format!("bind {} \"+if_jumpbug\"\n", s.jumpbug_key)
+    } else {
+        String::new()
+    };
+
     format!(
         "// ============================================================\n\
          // user/keys.cfg — key bindings, generated by the UI\n\
@@ -834,7 +872,7 @@ fn render_keys_cfg(s: &Settings) -> String {
          bind s \"+back_key\"\n\
          bind a \"+left_key\"\n\
          bind d \"+right_key\"\n\
-         bind space \"+if_jump\"\n\
+         {bhop_bind}\
          bind shift \"+sprint\"\n\
          bind ctrl  \"+duck\"\n\
          \n\
@@ -853,14 +891,15 @@ fn render_keys_cfg(s: &Settings) -> String {
          bind mouse2 \"+attack2\"\n\
          \n\
          // --- Utility ---\n\
-         bind {toggle_jiting_key} \"toggle_jiting\"\n\
-         bind {jump_throw_key} \"+if_jump_throw\"\n\
-         bind {fwd_jump_throw_key} \"+if_fwd_jump_throw\"\n\
-         bind {jumpbug_key} \"+if_jumpbug\"\n",
-        toggle_jiting_key = s.toggle_jiting_key,
-        jump_throw_key = s.jump_throw_key,
-        fwd_jump_throw_key = s.fwd_jump_throw_key,
-        jumpbug_key = s.jumpbug_key,
+         {toggle_jiting_bind}\
+         {jump_throw_bind}\
+         {fwd_jump_throw_bind}\
+         {jumpbug_bind}",
+        bhop_bind = bhop_bind,
+        toggle_jiting_bind = toggle_jiting_bind,
+        jump_throw_bind = jump_throw_bind,
+        fwd_jump_throw_bind = fwd_jump_throw_bind,
+        jumpbug_bind = jumpbug_bind,
     )
 }
 
