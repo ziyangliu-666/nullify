@@ -33,6 +33,7 @@ pub struct Settings {
     pub toggle_jiting_key: String,
     pub jump_throw_key: String,
     pub fwd_jump_throw_key: String,
+    pub jumpbug_key: String,
 }
 
 impl Default for Settings {
@@ -50,6 +51,7 @@ impl Default for Settings {
             toggle_jiting_key: "v".into(),
             jump_throw_key: "l".into(),
             fwd_jump_throw_key: "p".into(),
+            jumpbug_key: "k".into(),
         }
     }
 }
@@ -619,10 +621,11 @@ pub fn read_settings(cfg_dir: String, userdata_cfg: Option<String>) -> Result<Se
     // Read key bindings from keys.cfg
     let keys_path = PathBuf::from(&cfg_dir).join("nullify/user/keys.cfg");
     if let Ok(keys_content) = fs::read_to_string(&keys_path) {
-        let (tk, jk, fjk) = parse_keys_cfg(&keys_content);
+        let (tk, jk, fjk, jbk) = parse_keys_cfg(&keys_content);
         if !tk.is_empty()  { s.toggle_jiting_key = tk; }
         if !jk.is_empty()  { s.jump_throw_key = jk; }
         if !fjk.is_empty() { s.fwd_jump_throw_key = fjk; }
+        if !jbk.is_empty() { s.jumpbug_key = jbk; }
     }
 
     Ok(s)
@@ -779,12 +782,13 @@ fn render_settings(s: &Settings) -> String {
 
 // ─── Keys CFG ─────────────────────────────────────────────────────────────────
 
-/// Extract the 3 configurable key bindings from keys.cfg.
-/// Returns (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key).
-fn parse_keys_cfg(content: &str) -> (String, String, String) {
+/// Extract the 4 configurable key bindings from keys.cfg.
+/// Returns (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key).
+fn parse_keys_cfg(content: &str) -> (String, String, String, String) {
     let mut toggle_jiting_key = String::new();
     let mut jump_throw_key = String::new();
     let mut fwd_jump_throw_key = String::new();
+    let mut jumpbug_key = String::new();
 
     for line in content.lines() {
         // Strip comments
@@ -811,11 +815,12 @@ fn parse_keys_cfg(content: &str) -> (String, String, String) {
             "toggle_jiting"      => toggle_jiting_key = key.to_lowercase(),
             "+if_jump_throw"     => jump_throw_key = key.to_lowercase(),
             "+if_fwd_jump_throw" => fwd_jump_throw_key = key.to_lowercase(),
+            "+if_jumpbug"        => jumpbug_key = key.to_lowercase(),
             _ => {}
         }
     }
 
-    (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key)
+    (toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key)
 }
 
 fn render_keys_cfg(s: &Settings) -> String {
@@ -850,10 +855,12 @@ fn render_keys_cfg(s: &Settings) -> String {
          // --- Utility ---\n\
          bind {toggle_jiting_key} \"toggle_jiting\"\n\
          bind {jump_throw_key} \"+if_jump_throw\"\n\
-         bind {fwd_jump_throw_key} \"+if_fwd_jump_throw\"\n",
+         bind {fwd_jump_throw_key} \"+if_fwd_jump_throw\"\n\
+         bind {jumpbug_key} \"+if_jumpbug\"\n",
         toggle_jiting_key = s.toggle_jiting_key,
         jump_throw_key = s.jump_throw_key,
         fwd_jump_throw_key = s.fwd_jump_throw_key,
+        jumpbug_key = s.jumpbug_key,
     )
 }
 

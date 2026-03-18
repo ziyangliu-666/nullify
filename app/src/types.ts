@@ -23,6 +23,7 @@ export interface Settings {
   toggle_jiting_key: string;
   jump_throw_key: string;
   fwd_jump_throw_key: string;
+  jumpbug_key: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,6 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   toggle_jiting_key: "v",
   jump_throw_key: "l",
   fwd_jump_throw_key: "p",
+  jumpbug_key: "k",
 };
 
 export const JITING_MODES = [

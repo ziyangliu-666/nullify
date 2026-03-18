@@ -117,6 +117,8 @@ export default function Configure() {
           desc={t("jumpbug_desc")}
           checked={settings.jumpbug}
           onChange={(v) => set("jumpbug", v)}
+          keyValue={settings.jumpbug_key}
+          onKeyChange={(v) => set("jumpbug_key", v)}
         />
         <ToggleRow
           label={t("jump_throw")}
