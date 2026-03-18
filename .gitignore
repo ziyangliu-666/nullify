@@ -1,10 +1,11 @@
 # Tauri / Rust / Node
 app/target/
+app/src-tauri/target/
 app/node_modules/
 app/dist/
 
 # Python 生成器
-tools/__pycache__/
+tools/**/__pycache__/
 tools/*.pyc
 
 # 生成产物（由 tools/gen/ 脚本生成，不手写）

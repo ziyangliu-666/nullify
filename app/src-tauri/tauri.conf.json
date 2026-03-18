@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "nullify",
+  "version": "1.0.0",
+  "identifier": "com.nullify.installer",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "nullify",
+        "width": 860,
+        "height": 540,
+        "resizable": false,
+        "fullscreen": false,
+        "decorations": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [],
+    "resources": {
+      "../../cfg/**/*": "cfg/",
+      "../../cfg/.vtest": "cfg/.vtest"
+    }
+  }
+}
