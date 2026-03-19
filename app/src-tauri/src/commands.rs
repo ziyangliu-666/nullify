@@ -257,14 +257,13 @@ fn find_steam_path() -> Result<String, String> {
         }
     }
 
-    // Fallback: common install locations
-    let drives = ["C", "D", "E", "F"];
+    // Fallback: common install locations across all drive letters
     let paths = [
         "Program Files (x86)\\Steam",
         "Program Files\\Steam",
         "Steam",
     ];
-    for drive in &drives {
+    for drive in 'A'..='Z' {
         for path in &paths {
             let full = format!("{}:\\{}", drive, path);
             if PathBuf::from(&full).exists() {
@@ -730,7 +729,9 @@ fn modify_vcfg_binding(content: &str, key: &str, value: Option<&str>) -> Result<
         return Err("vcfg 中未找到 bindings 块".into());
     }
 
-    let mut result = out.join("\n");
+    let crlf = content.contains("\r\n");
+    let sep = if crlf { "\r\n" } else { "\n" };
+    let mut result = out.join(sep);
     if content.ends_with('\n') {
         result.push('\n');
     }
@@ -1066,7 +1067,9 @@ fn modify_launch_options(content: &str, new_value: &str) -> Result<String, Strin
         return Err("在 localconfig.vdf 中未找到 CS2 (730) 的 apps 块，请确认 CS2 已在该账号下启动过一次".into());
     }
 
-    let mut result = lines_out.join("\n");
+    let crlf = content.contains("\r\n");
+    let sep = if crlf { "\r\n" } else { "\n" };
+    let mut result = lines_out.join(sep);
     if content.ends_with('\n') {
         result.push('\n');
     }
