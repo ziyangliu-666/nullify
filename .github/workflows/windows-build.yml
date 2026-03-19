@@ -29,11 +29,35 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Read app version
+      - name: Resolve and validate release version
         id: meta
         shell: pwsh
         run: |
-          $version = (Get-Content "app/package.json" | ConvertFrom-Json).version
+          $packageVersion = (Get-Content "app/package.json" | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content "app/src-tauri/tauri.conf.json" | ConvertFrom-Json).version
+          $cargoToml = Get-Content "app/src-tauri/Cargo.toml" -Raw
+          $cargoMatch = [regex]::Match($cargoToml, '(?m)^version\s*=\s*"([^"]+)"')
+
+          if (-not $cargoMatch.Success) {
+            throw "Could not read version from app/src-tauri/Cargo.toml"
+          }
+
+          $cargoVersion = $cargoMatch.Groups[1].Value
+          $versions = @($packageVersion, $tauriVersion, $cargoVersion) | Select-Object -Unique
+
+          if ($versions.Count -ne 1) {
+            throw "Version mismatch detected. package.json=$packageVersion tauri.conf.json=$tauriVersion Cargo.toml=$cargoVersion"
+          }
+
+          $version = $packageVersion
+
+          if ("${{ github.ref }}".StartsWith("refs/tags/")) {
+            $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+            if ($tagVersion -ne $version) {
+              throw "Tag version mismatch. tag=${{ github.ref_name }} app=$version"
+            }
+          }
+
           "version=$version" >> $env:GITHUB_OUTPUT
           "asset_name=nullify-v$version-windows-x64.exe" >> $env:GITHUB_OUTPUT
 
