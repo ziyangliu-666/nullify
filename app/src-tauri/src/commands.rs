@@ -57,16 +57,7 @@ impl Default for Settings {
 pub fn detect_users() -> Result<Vec<SteamUser>, String> {
     let steam_path = find_steam_path()?;
 
-    let game_cfg = PathBuf::from(&steam_path)
-        .join("steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg");
-
-    if !game_cfg.exists() {
-        return Err(format!(
-            "CS2 CFG 目录不存在：{}",
-            game_cfg.display()
-        ));
-    }
-
+    let game_cfg = find_cs2_cfg_path(&steam_path)?;
     let game_cfg_str = game_cfg.to_string_lossy().into_owned();
 
     // Parse loginusers.vdf
@@ -288,6 +279,52 @@ fn find_steam_path() -> Result<String, String> {
 #[cfg(not(target_os = "windows"))]
 fn find_steam_path() -> Result<String, String> {
     Err("仅 Windows 支持自动检测 Steam 路径".into())
+}
+
+/// Parse libraryfolders.vdf and return all Steam library paths (including the
+/// default one passed in as `steam_path`).
+fn find_steam_library_paths(steam_path: &str) -> Vec<String> {
+    let mut paths = vec![steam_path.to_string()];
+
+    let vdf_path = PathBuf::from(steam_path).join("steamapps/libraryfolders.vdf");
+    let content = match fs::read_to_string(&vdf_path) {
+        Ok(c) => c,
+        Err(_) => return paths,
+    };
+
+    // Each library folder entry looks like:
+    //   "path"    "D:\\SteamLibrary"
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let parts = vdf_strings(trimmed);
+        if parts.len() == 2 && parts[0].to_lowercase() == "path" {
+            let lib = parts[1].clone();
+            if !paths.iter().any(|p| p.eq_ignore_ascii_case(&lib)) {
+                paths.push(lib);
+            }
+        }
+    }
+
+    paths
+}
+
+/// Find the CS2 CFG directory by searching all Steam library folders.
+fn find_cs2_cfg_path(steam_path: &str) -> Result<PathBuf, String> {
+    const CS2_RELATIVE: &str =
+        "steamapps/common/Counter-Strike Global Offensive/game/csgo/cfg";
+
+    for lib in find_steam_library_paths(steam_path) {
+        let candidate = PathBuf::from(&lib).join(CS2_RELATIVE);
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    // Report the default path in the error so the user knows what we expected
+    Err(format!(
+        "CS2 CFG 目录不存在：{}",
+        PathBuf::from(steam_path).join(CS2_RELATIVE).display()
+    ))
 }
 
 // ─── Install ──────────────────────────────────────────────────────────────────
