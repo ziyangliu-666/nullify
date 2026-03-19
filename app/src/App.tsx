@@ -1,4 +1,5 @@
 import { createContext, useContext, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import Install from "./pages/Install";
 import Configure from "./pages/Configure";
 import type { Locale } from "./i18n";
@@ -47,6 +48,9 @@ export function useUsers() {
 
 type Tab = "install" | "configure";
 
+const RUFUS_URL = "https://space.bilibili.com/108063845";
+const FOREVER_RISE_URL = "https://space.bilibili.com/393111255";
+
 export default function App() {
   const [locale, setLocale] = useState<Locale>("zh");
   const [tab, setTab] = useState<Tab>("install");
@@ -55,6 +59,14 @@ export default function App() {
 
   const t = makeT(locale);
 
+  async function openExternalLink(url: string) {
+    try {
+      await invoke("open_external_link", { url });
+    } catch {
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+  }
+
   return (
     <LocaleContext.Provider value={{ locale, setLocale, t }}>
       <UserContext.Provider
@@ -62,15 +74,38 @@ export default function App() {
       >
         <div className="flex flex-col h-screen w-screen bg-cs-bg">
           {/* Header */}
-          <div className="flex items-center justify-between px-6 pt-5 pb-0 shrink-0">
-            <div className="flex items-center gap-3">
+          <div className="flex items-center justify-between gap-4 px-6 pt-5 pb-0 shrink-0">
+            <div className="flex items-center gap-3 shrink-0">
               <span className="text-cs-accent font-bold text-lg tracking-widest uppercase">
                 nullify
               </span>
               <span className="text-cs-muted text-xs tracking-wider">CS2 CFG</span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center justify-center px-2">
+              <div className="min-w-0 truncate text-[11px] tracking-wide text-cs-muted">
+                <button
+                  type="button"
+                  onClick={() => void openExternalLink(RUFUS_URL)}
+                  className="credit-link inline-flex items-center gap-1 font-semibold text-cs-accent"
+                >
+                  <span aria-hidden="true" className="text-[10px] leading-none">
+                    ♥
+                  </span>
+                  {t("credit_by")}
+                </button>
+                <span className="mx-2 text-cs-border">|</span>
+                <button
+                  type="button"
+                  onClick={() => void openExternalLink(FOREVER_RISE_URL)}
+                  className="credit-link"
+                >
+                  {t("credit_reference")}
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
               {/* Tabs */}
               <div className="flex gap-1 bg-cs-surface border border-cs-border rounded-lg p-0.5">
                 {(["install", "configure"] as Tab[]).map((tabKey) => (
@@ -103,7 +138,11 @@ export default function App() {
 
           {/* Page */}
           <div className="flex-1 overflow-hidden">
-            {tab === "install" ? <Install /> : <Configure />}
+            {tab === "install" ? (
+              <Install onOpenConfigure={() => setTab("configure")} />
+            ) : (
+              <Configure />
+            )}
           </div>
         </div>
       </UserContext.Provider>

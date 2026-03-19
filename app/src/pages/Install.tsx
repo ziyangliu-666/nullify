@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useLocale, useUsers } from "../App";
 import type { SteamUser } from "../types";
+import clearSteamLaunchExample from "../assets/clear-steam-launch-example.png";
+import officialSteamLaunchExample from "../assets/official-steam-launch-example.png";
+import thirdPartyLaunchExample from "../assets/third-party-launch-example.png";
 
 const FALLBACK_LAUNCH_OPTION =
   `+exec nullify/setup -testscript "../../csgo/cfg/nullify/.vtest"`;
@@ -52,33 +56,13 @@ function Avatar({
   );
 }
 
-type LaunchStatus = "unknown" | "ok" | "missing" | "different";
+type PlatformMode = "official" | "third_party" | null;
 
-function useLaunchStatus(user: SteamUser | null, launchOption: string) {
-  const [status, setStatus] = useState<LaunchStatus>("unknown");
-  const [currentValue, setCurrentValue] = useState<string>("");
-
-  useEffect(() => {
-    if (!user?.localconfig_path) {
-      setStatus("unknown");
-      return;
-    }
-    invoke<string>("get_launch_options", {
-      localconfigPath: user.localconfig_path,
-    })
-      .then((val) => {
-        setCurrentValue(val);
-        if (val === launchOption) setStatus("ok");
-        else if (!val.trim()) setStatus("missing");
-        else setStatus("different");
-      })
-      .catch(() => setStatus("unknown"));
-  }, [user?.localconfig_path, launchOption]);
-
-  return { status, currentValue, setStatus };
-}
-
-export default function Install() {
+export default function Install({
+  onOpenConfigure,
+}: {
+  onOpenConfigure: () => void;
+}) {
   const { t } = useLocale();
   const { users, setUsers, selectedUser, setSelectedUser } = useUsers();
 
@@ -90,17 +74,10 @@ export default function Install() {
     ok: boolean;
     text: string;
   } | null>(null);
-
-  const [writing, setWriting] = useState(false);
-  const [writeMsg, setWriteMsg] = useState<{ ok: boolean; text: string } | null>(
-    null
-  );
-  const [pendingSteamRestart, setPendingSteamRestart] = useState(false);
+  const [closeMsg, setCloseMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [launchOption, setLaunchOption] = useState(FALLBACK_LAUNCH_OPTION);
-
-  const { status: launchStatus, setStatus: setLaunchStatus } =
-    useLaunchStatus(selectedUser, launchOption);
+  const [platformMode, setPlatformMode] = useState<PlatformMode>(null);
 
   useEffect(() => {
     invoke<string>("nullify_launch_option")
@@ -109,35 +86,8 @@ export default function Install() {
   }, []);
 
   useEffect(() => {
-    if (!pendingSteamRestart) return;
-
-    let cancelled = false;
-
-    async function checkSteam() {
-      try {
-        const running = await invoke<boolean>("steam_running_status");
-        if (!cancelled && !running) {
-          setPendingSteamRestart(false);
-          setWriteMsg(null);
-        }
-      } catch {
-        // Ignore transient checks; keep the message until a successful check clears it.
-      }
-    }
-
-    void checkSteam();
-    const intervalId = window.setInterval(() => {
-      void checkSteam();
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(intervalId);
-    };
-  }, [pendingSteamRestart]);
-
-  useEffect(() => {
-    setPendingSteamRestart(false);
+    setPlatformMode(null);
+    setCopied(false);
   }, [selectedUser?.account_id]);
 
   // Load users on mount
@@ -147,14 +97,22 @@ export default function Install() {
         setUsers(u);
         const most_recent = u.find((x) => x.is_most_recent) ?? u[0] ?? null;
         setSelectedUser(most_recent);
-        if (most_recent) {
-          invoke<boolean>("install_status", {
-            gameCfgDir: most_recent.game_cfg,
-          }).then(setInstalled);
-        }
       })
       .catch((e: unknown) => setLoadError(String(e)));
   }, []);
+
+  useEffect(() => {
+    if (!selectedUser?.game_cfg) {
+      setInstalled(false);
+      return;
+    }
+
+    invoke<boolean>("install_status", {
+      gameCfgDir: selectedUser.game_cfg,
+    })
+      .then(setInstalled)
+      .catch(() => setInstalled(false));
+  }, [selectedUser?.game_cfg]);
 
   async function handleInstall() {
     if (!selectedUser) return;
@@ -195,36 +153,24 @@ export default function Install() {
     }
   }
 
-  async function handleWriteLaunchOption() {
-    if (!selectedUser?.localconfig_path) return;
-    setWriting(true);
-    setWriteMsg(null);
-    try {
-      const needsRestart = await invoke<boolean>("set_launch_options", {
-        localconfigPath: selectedUser.localconfig_path,
-        value: launchOption,
-      });
-      setLaunchStatus("ok");
-      setPendingSteamRestart(needsRestart);
-      setWriteMsg({
-        ok: true,
-        text: needsRestart ? t("write_need_restart") : t("write_ok_no_restart"),
-      });
-    } catch (e: unknown) {
-      setPendingSteamRestart(false);
-      setWriteMsg({ ok: false, text: String(e) });
-    } finally {
-      setWriting(false);
-    }
-  }
-
   async function handleCopy() {
     await navigator.clipboard.writeText(launchOption);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
 
+  async function handleCloseInstaller() {
+    setCloseMsg(null);
+    try {
+      await getCurrentWindow().close();
+    } catch (e: unknown) {
+      setCloseMsg(String(e));
+    }
+  }
+
   const gameCfg = selectedUser?.game_cfg ?? null;
+  const canChoosePlatform = Boolean(selectedUser && installed);
+  const canConfigure = Boolean(selectedUser && installed && platformMode);
 
   return (
     <div className="h-full overflow-y-auto px-6 py-4 space-y-3">
@@ -244,36 +190,40 @@ export default function Install() {
           selected={selectedUser}
           onSelect={(u) => {
             setSelectedUser(u);
-            invoke<boolean>("install_status", {
-              gameCfgDir: u.game_cfg,
-            }).then(setInstalled);
           }}
         />
       )}
 
-      {/* CFG path + install */}
+      {/* Step 1 */}
       {gameCfg && (
-        <div className="section-card space-y-2">
-          <div className="text-xs font-semibold uppercase tracking-widest text-cs-muted">
-            {t("game_cfg_title")}
-          </div>
-          <div className="flex items-start gap-2">
-            <CheckIcon className="text-cs-success mt-0.5 shrink-0" />
-            <span className="text-xs text-cs-text font-mono break-all leading-relaxed">
-              {gameCfg}
-            </span>
-          </div>
-          <div className="flex items-center gap-2 pt-0.5">
-            <span className="text-xs text-cs-muted">{t("install_shared_hint")}</span>
-            <span
-              className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full border shrink-0 ${
-                installed
-                  ? "border-cs-success text-cs-success bg-cs-success/10"
-                  : "border-cs-muted text-cs-muted"
-              }`}
-            >
-              {installed ? t("status_installed") : t("status_not_installed")}
-            </span>
+        <FlowSection
+          step="1"
+          title={t("step_install_cfg_title")}
+        >
+          <div className="space-y-2">
+            <div className="text-xs font-semibold uppercase tracking-widest text-cs-muted">
+              {t("game_cfg_title")}
+            </div>
+            <div className="flex items-start gap-2">
+              <CheckIcon className="text-cs-success mt-0.5 shrink-0" />
+              <span className="text-xs text-cs-text font-mono break-all leading-relaxed">
+                {gameCfg}
+              </span>
+            </div>
+            <div className="flex items-center gap-2 pt-0.5">
+              <span className="text-xs text-cs-muted">
+                {t("install_shared_hint")}
+              </span>
+              <span
+                className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full border shrink-0 ${
+                  installed
+                    ? "border-cs-success text-cs-success bg-cs-success/10"
+                    : "border-cs-muted text-cs-muted"
+                }`}
+              >
+                {installed ? t("status_installed") : t("status_not_installed")}
+              </span>
+            </div>
           </div>
 
           <div className="flex items-center gap-3 pt-1">
@@ -307,72 +257,193 @@ export default function Install() {
               </span>
             )}
           </div>
-        </div>
+        </FlowSection>
       )}
 
-      {/* Launch option */}
+      {/* Step 2 */}
       {selectedUser && (
-        <div className="section-card space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="text-xs font-semibold uppercase tracking-widest text-cs-muted">
-              {t("launch_option_title")}
-            </div>
-            <LaunchStatusBadge status={launchStatus} />
-          </div>
-          <p className="text-xs text-cs-muted">{t("launch_option_desc")}</p>
+        <FlowSection
+          step="2"
+          title={t("step_choose_platform_title")}
+          muted={!canChoosePlatform}
+        >
+          <div className="grid gap-3 md:grid-cols-2">
+            <button
+              className={`rounded-lg border px-4 py-3 text-left transition-colors duration-150 ${
+                platformMode === "official"
+                  ? "border-cs-accent bg-cs-accent/10"
+                  : "border-cs-border bg-cs-bg hover:border-cs-muted"
+              } ${!canChoosePlatform ? "opacity-50 cursor-not-allowed" : ""}`}
+              disabled={!canChoosePlatform}
+              onClick={() => setPlatformMode("official")}
+            >
+              <div className="text-sm font-semibold text-cs-text">
+                {t("official_launch_title")}
+              </div>
+              <p className="mt-1 text-xs text-cs-muted">
+                {t("platform_choice_official_hint")}
+              </p>
+            </button>
 
-          <div className="flex items-center gap-2">
-            <code className="flex-1 bg-cs-bg border border-cs-border rounded px-3 py-2 text-xs text-cs-text font-mono break-all select-text">
-              {launchOption}
-            </code>
-            <button className="btn-ghost shrink-0" onClick={handleCopy}>
-              {copied ? t("copied_btn") : t("copy_btn")}
+            <button
+              className={`rounded-lg border px-4 py-3 text-left transition-colors duration-150 ${
+                platformMode === "third_party"
+                  ? "border-cs-accent bg-cs-accent/10"
+                  : "border-cs-border bg-cs-bg hover:border-cs-muted"
+              } ${!canChoosePlatform ? "opacity-50 cursor-not-allowed" : ""}`}
+              disabled={!canChoosePlatform}
+              onClick={() => setPlatformMode("third_party")}
+            >
+              <div className="text-sm font-semibold text-cs-text">
+                {t("third_party_launch_title")}
+              </div>
+              <p className="mt-1 text-xs text-cs-muted">
+                {t("platform_choice_third_party_hint")}
+              </p>
             </button>
           </div>
-
-          {selectedUser.localconfig_path ? (
-            <div className="flex items-center gap-3">
-              <button
-                className="btn-primary"
-                disabled={writing}
-                onClick={handleWriteLaunchOption}
-              >
-                {writing
-                  ? t("writing_btn")
-                  : launchStatus === "ok"
-                  ? t("rewrite_btn")
-                  : t("write_btn")}
-              </button>
-              {writeMsg && (
-                <span
-                  className={`text-xs ${
-                    writeMsg.ok ? "text-cs-success" : "text-cs-error"
-                  }`}
-                >
-                  {writeMsg.text}
-                </span>
-              )}
-            </div>
-          ) : (
-            <p className="text-xs text-cs-muted">
-              {t("no_userdata")} — 请手动粘贴启动项
-            </p>
-          )}
-        </div>
+        </FlowSection>
       )}
 
-      {/* Steps */}
-      <div className="section-card text-xs text-cs-muted space-y-1">
-        <div className="font-semibold uppercase tracking-widest mb-1.5">
-          {t("steps_title")}
+      {/* Step 3 */}
+      {selectedUser && (
+        <FlowSection
+          step="3"
+          title={t("step_apply_platform_title")}
+          muted={!installed || !platformMode}
+        >
+          {!installed ? (
+            <p className="text-xs text-cs-muted">
+              {t("step_apply_platform_wait_install")}
+            </p>
+          ) : !platformMode ? (
+            <p className="text-xs text-cs-muted">
+              {t("step_apply_platform_wait_choice")}
+            </p>
+          ) : platformMode === "official" && !selectedUser.localconfig_path ? (
+            <div className="space-y-3 rounded border border-cs-border bg-cs-bg/40 px-3 py-3">
+              <p className="text-xs text-cs-muted">
+                {t("official_manual_desc")}
+              </p>
+              <LaunchOptionCode
+                copied={copied}
+                launchOption={launchOption}
+                onCopy={handleCopy}
+              />
+            </div>
+          ) : platformMode === "official" ? (
+            <div className="space-y-3 rounded border border-cs-border bg-cs-bg/40 px-3 py-3">
+              <div>
+                <div className="text-sm text-cs-text">
+                  {t("official_launch_title")}
+                </div>
+                <p className="mt-1 text-xs text-cs-muted">
+                  {t("official_launch_desc")}
+                </p>
+              </div>
+
+              <div className="text-xs text-cs-muted">{t("official_action_hint")}</div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-cs-muted">
+                  {t("launch_option_reference_title")}
+                </div>
+                <LaunchOptionCode
+                  copied={copied}
+                  launchOption={launchOption}
+                  onCopy={handleCopy}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-cs-muted">
+                  {t("official_example_title")}
+                </div>
+                <img
+                  src={officialSteamLaunchExample}
+                  alt={t("official_example_alt")}
+                  className="mx-auto max-h-56 w-full max-w-2xl rounded-lg border border-cs-border bg-cs-bg object-contain"
+                />
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3 rounded border border-cs-border bg-cs-bg/40 px-3 py-3">
+              <div className="text-sm text-cs-text">
+                {t("third_party_launch_title")}
+              </div>
+
+              <div className="rounded border border-yellow-600/50 bg-yellow-600/10 px-3 py-2 text-xs text-yellow-400 font-medium">
+                {t("third_party_launch_warning")}
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-cs-muted">
+                  {t("third_party_action_hint")}
+                </div>
+                <img
+                  src={clearSteamLaunchExample}
+                  alt={t("third_party_clear_example_alt")}
+                  className="mx-auto max-h-56 w-full max-w-2xl rounded-lg border border-cs-border bg-cs-bg object-contain"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-cs-muted">
+                  {t("third_party_copy_title")}
+                </div>
+                <LaunchOptionCode
+                  copied={copied}
+                  launchOption={launchOption}
+                  onCopy={handleCopy}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <div className="text-xs text-cs-muted">
+                  {t("third_party_example_title")}
+                </div>
+                <img
+                  src={thirdPartyLaunchExample}
+                  alt={t("third_party_example_alt")}
+                  className="mx-auto max-h-56 w-full max-w-2xl rounded-lg border border-cs-border bg-cs-bg object-contain"
+                />
+              </div>
+            </div>
+          )}
+        </FlowSection>
+      )}
+
+      {/* Step 4 */}
+      {selectedUser && (
+        <FlowSection
+          step="4"
+          title={t("step_configure_title")}
+          muted={!canConfigure}
+        >
+          <div className="flex items-center gap-3">
+            <button
+              className="btn-primary"
+              disabled={!canConfigure}
+              onClick={onOpenConfigure}
+            >
+              {t("open_configure_btn")}
+            </button>
+            <span className="text-xs text-cs-muted">
+              {t("configure_step_hint")}
+            </span>
+          </div>
+        </FlowSection>
+      )}
+
+      <FlowSection step="5" title={t("step_close_title")}>
+        <div className="flex items-center gap-3">
+          <button className="btn-primary" onClick={handleCloseInstaller}>
+            {t("close_installer_btn")}
+          </button>
+          <span className="text-xs text-cs-muted">{t("close_step_hint")}</span>
         </div>
-        <ol className="list-decimal list-inside space-y-1">
-          <li>{t("step_1")}</li>
-          <li>{t("step_2")}</li>
-          <li>{t("step_3")}</li>
-          <li>{t("step_4")}</li>
-        </ol>
-      </div>
+        {closeMsg && <div className="text-xs text-cs-error">{closeMsg}</div>}
+      </FlowSection>
 
       {/* Cloud sync notice */}
       <div className="flex items-start gap-2 px-1 pb-1">
@@ -388,6 +459,62 @@ export default function Install() {
 }
 
 // ─── User switcher ────────────────────────────────────────────────────────────
+
+function FlowSection({
+  step,
+  title,
+  muted = false,
+  children,
+}: {
+  step: string;
+  title: string;
+  muted?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={`section-card space-y-3 ${muted ? "opacity-80" : ""}`}>
+      <div className="flex items-center gap-3 pt-1">
+        <div
+          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+            muted
+              ? "border-cs-border text-cs-muted bg-cs-bg"
+              : "border-cs-accent/40 bg-cs-accent/10 text-cs-accent"
+          }`}
+        >
+          {step}
+        </div>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-cs-text">{title}</div>
+        </div>
+      </div>
+
+      {children}
+    </div>
+  );
+}
+
+function LaunchOptionCode({
+  launchOption,
+  copied,
+  onCopy,
+}: {
+  launchOption: string;
+  copied: boolean;
+  onCopy: () => void;
+}) {
+  const { t } = useLocale();
+
+  return (
+    <div className="flex items-center gap-2">
+      <code className="flex-1 bg-cs-bg border border-cs-border rounded px-3 py-2 text-xs text-cs-text font-mono break-all select-text">
+        {launchOption}
+      </code>
+      <button className="btn-ghost shrink-0" onClick={onCopy}>
+        {copied ? t("copied_btn") : t("copy_btn")}
+      </button>
+    </div>
+  );
+}
 
 function UserSwitcher({
   users,
@@ -499,26 +626,6 @@ function UserCard({
         </div>
       </div>
     </button>
-  );
-}
-
-function LaunchStatusBadge({ status }: { status: LaunchStatus }) {
-  const { t } = useLocale();
-
-  if (status === "unknown") return null;
-
-  const map: Record<LaunchStatus, { cls: string; text: string }> = {
-    unknown: { cls: "", text: "" },
-    ok: { cls: "border-cs-success text-cs-success bg-cs-success/10", text: t("launch_status_ok") },
-    missing: { cls: "border-cs-muted text-cs-muted", text: t("launch_status_missing") },
-    different: { cls: "border-yellow-600 text-yellow-500", text: t("launch_status_different") },
-  };
-
-  const { cls, text } = map[status];
-  return (
-    <span className={`text-[10px] font-medium px-2 py-0.5 rounded-full border ${cls}`}>
-      {text}
-    </span>
   );
 }
 

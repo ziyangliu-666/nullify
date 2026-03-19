@@ -107,7 +107,7 @@ export default function Configure() {
     const seq = ++saveSeqRef.current;
 
     try {
-      const steamRunning = await invoke<boolean>("write_settings", {
+      await invoke("write_settings", {
         cfgDir: gameCfg,
         userdataCfg,
         settings,
@@ -116,7 +116,7 @@ export default function Configure() {
       if (saveSeqRef.current !== seq) return;
       setToast({
         ok: true,
-        msg: steamRunning ? t("write_need_restart") : t("saved_ok"),
+        msg: t("saved_ok"),
       });
     } catch (e: unknown) {
       if (saveSeqRef.current !== seq) return;

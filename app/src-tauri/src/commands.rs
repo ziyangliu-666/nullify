@@ -843,7 +843,7 @@ fn extract_launch_options(content: &str) -> Option<String> {
 }
 
 #[tauri::command]
-pub fn set_launch_options(localconfig_path: String, value: String) -> Result<bool, String> {
+pub fn set_launch_options(localconfig_path: String, value: String) -> Result<(), String> {
     let content = fs::read_to_string(&localconfig_path)
         .map_err(|e| format!("无法读取 localconfig.vdf: {}", e))?;
 
@@ -853,14 +853,50 @@ pub fn set_launch_options(localconfig_path: String, value: String) -> Result<boo
     fs::write(&localconfig_path, new_content)
         .map_err(|e| format!("无法写入 localconfig.vdf: {}", e))?;
 
-    // Return true if Steam is currently running (needs restart)
-    Ok(is_steam_running())
+    Ok(())
 }
 
 /// Returns the default nullify launch option string
 #[tauri::command]
 pub fn nullify_launch_option() -> String {
     LAUNCH_OPTION_VALUE.to_string()
+}
+
+#[tauri::command]
+pub fn open_external_link(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("仅支持 http/https 链接".into());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("打开浏览器失败: {}", e))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("当前平台不支持打开外链".into())
 }
 
 fn modify_launch_options(content: &str, new_value: &str) -> Result<String, String> {
@@ -992,11 +1028,6 @@ struct KeyBindBackup {
 }
 
 #[tauri::command]
-pub fn steam_running_status() -> bool {
-    is_steam_running()
-}
-
-#[tauri::command]
 pub fn restart_steam() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -1098,7 +1129,7 @@ pub fn write_settings(
     cfg_dir: String,
     userdata_cfg: Option<String>,
     settings: Settings,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let dir = PathBuf::from(&cfg_dir).join("nullify/user");
     fs::create_dir_all(&dir)
         .map_err(|e| format!("创建目录失败: {}", e))?;
@@ -1125,9 +1156,7 @@ pub fn write_settings(
     fs::write(&keys_path, keys_content)
         .map_err(|e| format!("写入 keys.cfg 失败: {}", e))?;
 
-    // CFG changes are applied when CS2 starts (or when you exec again).
-    // We treat "Steam running" as a proxy for "CS2 likely running" and show a hint.
-    Ok(is_steam_running())
+    Ok(())
 }
 
 fn render_settings(s: &Settings) -> String {
