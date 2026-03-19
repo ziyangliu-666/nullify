@@ -1,8 +1,12 @@
+#[cfg(not(debug_assertions))]
+use include_dir::{include_dir, Dir, DirEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::Manager;
+
+#[cfg(not(debug_assertions))]
+static CFG_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/../../cfg");
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -289,8 +293,7 @@ fn find_steam_path() -> Result<String, String> {
 // ─── Install ──────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn install_cfg(app: tauri::AppHandle, game_cfg_dir: String) -> Result<(), String> {
-    let src = resolve_cfg_source(&app)?;
+pub fn install_cfg(_app: tauri::AppHandle, game_cfg_dir: String) -> Result<(), String> {
     let dest = PathBuf::from(&game_cfg_dir).join("nullify");
 
     // Remove stale installation before copying so old flat files don't linger
@@ -298,7 +301,7 @@ pub fn install_cfg(app: tauri::AppHandle, game_cfg_dir: String) -> Result<(), St
         fs::remove_dir_all(&dest).map_err(|e| format!("清理旧版本失败: {}", e))?;
     }
 
-    copy_dir_recursive(&src, &dest).map_err(|e| format!("安装失败: {}", e))?;
+    write_cfg_dir(&dest).map_err(|e| format!("安装失败: {}", e))?;
 
     Ok(())
 }
@@ -326,44 +329,33 @@ pub fn uninstall_cfg(game_cfg_dir: String, userdata_cfg: Option<String>) -> Resu
     Ok(())
 }
 
-fn resolve_cfg_source(app: &tauri::AppHandle) -> Result<PathBuf, String> {
-    // Dev builds: always use the source directory so changes take effect immediately
-    // without needing to restart the dev server (bypasses stale resource cache in target/)
+fn write_cfg_dir(dst: &Path) -> std::io::Result<()> {
     #[cfg(debug_assertions)]
     {
-        let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.join("cfg"))
-            .unwrap_or_else(|| PathBuf::from("../../cfg"));
-        if dev_path.exists() {
-            return Ok(dev_path);
+        return copy_dir_fs(&dev_cfg_path(), dst);
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        fs::create_dir_all(dst)?;
+        for entry in CFG_DIR.entries() {
+            let name = entry_name(entry);
+            if name == ".gitkeep" {
+                continue;
+            }
+
+            match entry {
+                DirEntry::Dir(d) => write_embedded_dir(d, &dst.join(name))?,
+                DirEntry::File(f) => fs::write(dst.join(name), f.contents())?,
+            }
         }
+
+        Ok(())
     }
-
-    // Production: bundled resources
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let bundled = resource_dir.join("cfg");
-        if bundled.exists() {
-            return Ok(bundled);
-        }
-    }
-
-    // Final fallback for dev
-    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(|p| p.parent())
-        .map(|p| p.join("cfg"))
-        .unwrap_or_else(|| PathBuf::from("../../cfg"));
-
-    if dev_path.exists() {
-        return Ok(dev_path);
-    }
-
-    Err(format!("CFG 源文件未找到 (dev path: {})", dev_path.display()))
 }
 
-fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+#[cfg(debug_assertions)]
+fn copy_dir_fs(src: &Path, dst: &Path) -> std::io::Result<()> {
     fs::create_dir_all(dst)?;
 
     for entry in fs::read_dir(src)? {
@@ -372,16 +364,57 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
         if name.to_string_lossy() == ".gitkeep" {
             continue;
         }
+
         let src_path = entry.path();
         let dst_path = dst.join(&name);
         if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+            copy_dir_fs(&src_path, &dst_path)?;
         } else {
             fs::copy(&src_path, &dst_path)?;
         }
     }
 
     Ok(())
+}
+
+#[cfg(debug_assertions)]
+fn dev_cfg_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("cfg"))
+        .unwrap_or_else(|| PathBuf::from("../../cfg"))
+}
+
+#[cfg(not(debug_assertions))]
+fn write_embedded_dir(dir: &Dir, dest: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(dest)?;
+
+    for entry in dir.entries() {
+        let name = entry_name(entry);
+        if name == ".gitkeep" {
+            continue;
+        }
+
+        match entry {
+            DirEntry::Dir(d) => write_embedded_dir(d, &dest.join(name))?,
+            DirEntry::File(f) => fs::write(dest.join(name), f.contents())?,
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn entry_name<'a>(entry: &'a DirEntry) -> &'a str {
+    let path = match entry {
+        DirEntry::Dir(d) => d.path(),
+        DirEntry::File(f) => f.path(),
+    };
+
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
 }
 
 #[tauri::command]

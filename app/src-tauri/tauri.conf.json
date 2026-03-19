@@ -27,15 +27,11 @@
     }
   },
   "bundle": {
-    "active": true,
+    "active": false,
     "targets": "all",
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"
-    ],
-    "resources": {
-      "../../cfg/**/*": "cfg/",
-      "../../cfg/.vtest": "cfg/.vtest"
-    }
+    ]
   }
 }
