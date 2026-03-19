@@ -251,7 +251,7 @@ function KeyBindRow({
     <div className="flex items-center justify-between gap-4">
       <div className="min-w-0">
         <div className="text-sm text-cs-text">{label}</div>
-        {desc && <div className="text-xs text-cs-muted truncate">{desc}</div>}
+        {desc && <div className="text-xs leading-5 text-cs-muted">{desc}</div>}
       </div>
       <KeyCapture value={value} onChange={onKeyChange} />
     </div>

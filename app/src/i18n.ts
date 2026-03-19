@@ -97,7 +97,7 @@ const zh = {
   // Configure — features
   features_title: "功能",
   bhop: "连跳",
-  bhop_desc: "按下自动连跳",
+  bhop_desc: "按下自动连跳；连跳键按下期间 FPS 锁定 64 帧",
   jumpbug: "大跳",
   jumpbug_desc: "按下自动蹲+跳",
   jump_throw: "跳投",
@@ -208,7 +208,7 @@ const en = {
 
   features_title: "Features",
   bhop: "Bhop",
-  bhop_desc: "Press to auto bunny-hop",
+  bhop_desc: "Press to auto bunny-hop; FPS is locked to 64 while the bhop key is held",
   jumpbug: "Jumpbug",
   jumpbug_desc: "Press to auto crouch + jump",
   jump_throw: "Jump Throw",
