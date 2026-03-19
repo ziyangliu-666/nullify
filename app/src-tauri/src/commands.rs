@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::Manager;
@@ -21,17 +22,11 @@ pub struct SteamUser {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Settings {
-    pub jiting: bool,
-    pub jiting_mode: String,
     pub bhop: bool,
     pub bhop_key: String,
     pub jumpbug: bool,
     pub jump_throw: bool,
     pub fwd_jump_throw: bool,
-    pub sensitivity: f32,
-    pub m_yaw: f32,
-    pub m_pitch: f32,
-    pub toggle_jiting_key: String,
     pub jump_throw_key: String,
     pub fwd_jump_throw_key: String,
     pub jumpbug_key: String,
@@ -40,20 +35,14 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Settings {
-            jiting: true,
-            jiting_mode: "jt_mode_3".into(),
-            bhop: true,
-            bhop_key: "space".into(),
+            bhop: false,
+            bhop_key: String::new(),
             jumpbug: false,
-            jump_throw: true,
+            jump_throw: false,
             fwd_jump_throw: false,
-            sensitivity: 1.0,
-            m_yaw: 0.022,
-            m_pitch: 0.022,
-            toggle_jiting_key: "v".into(),
-            jump_throw_key: "l".into(),
-            fwd_jump_throw_key: "p".into(),
-            jumpbug_key: "k".into(),
+            jump_throw_key: String::new(),
+            fwd_jump_throw_key: String::new(),
+            jumpbug_key: String::new(),
         }
     }
 }
@@ -314,6 +303,29 @@ pub fn install_cfg(app: tauri::AppHandle, game_cfg_dir: String) -> Result<(), St
     Ok(())
 }
 
+#[tauri::command]
+pub fn uninstall_cfg(game_cfg_dir: String, userdata_cfg: Option<String>) -> Result<(), String> {
+    let dest = PathBuf::from(&game_cfg_dir).join("nullify");
+
+    if let Some(ref userdata_cfg) = userdata_cfg {
+        let keys_path = dest.join("user/keys.cfg");
+        let prev_bindings = fs::read_to_string(&keys_path)
+            .ok()
+            .map(|content| parse_feature_bindings(&content))
+            .unwrap_or_default();
+
+        if !prev_bindings.is_empty() {
+            restore_vcfg_bindings(&game_cfg_dir, userdata_cfg, &prev_bindings)?;
+        }
+    }
+
+    if dest.exists() {
+        fs::remove_dir_all(&dest).map_err(|e| format!("卸载失败: {}", e))?;
+    }
+
+    Ok(())
+}
+
 fn resolve_cfg_source(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     // Dev builds: always use the source directory so changes take effect immediately
     // without needing to restart the dev server (bypasses stale resource cache in target/)
@@ -377,6 +389,380 @@ pub fn install_status(game_cfg_dir: String) -> bool {
     PathBuf::from(&game_cfg_dir)
         .join("nullify/setup.cfg")
         .exists()
+}
+
+fn keybind_backup_path(cfg_dir: &str) -> PathBuf {
+    PathBuf::from(cfg_dir).join("nullify/user/keybind_backup.json")
+}
+
+fn load_keybind_backup(cfg_dir: &str) -> Result<KeyBindBackup, String> {
+    let path = keybind_backup_path(cfg_dir);
+    if !path.exists() {
+        return Ok(KeyBindBackup::default());
+    }
+
+    let json = fs::read_to_string(&path).map_err(|e| format!("读取键位备份失败: {}", e))?;
+    serde_json::from_str(&json).map_err(|e| format!("解析键位备份失败: {}", e))
+}
+
+fn save_keybind_backup(cfg_dir: &str, backup: &KeyBindBackup) -> Result<(), String> {
+    let path = keybind_backup_path(cfg_dir);
+    if backup.original_binds.is_empty() {
+        if path.exists() {
+            fs::remove_file(&path).map_err(|e| format!("删除键位备份失败: {}", e))?;
+        }
+        return Ok(());
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("创建键位备份目录失败: {}", e))?;
+    }
+
+    let json = serde_json::to_string_pretty(backup)
+        .map_err(|e| format!("序列化键位备份失败: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("写入键位备份失败: {}", e))
+}
+
+fn collect_vcfg_paths(userdata_cfg: &str) -> Result<Vec<PathBuf>, String> {
+    let dir = PathBuf::from(userdata_cfg);
+    let mut files = Vec::new();
+
+    let entries = fs::read_dir(&dir)
+        .map_err(|e| format!("读取 userdata cfg 目录失败: {}", e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取 userdata cfg 目录失败: {}", e))?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let is_key_vcfg = name.starts_with("cs2_user_keys_")
+            && name.contains("_slot")
+            && (name.ends_with(".vcfg") || name.ends_with(".vcfg_lastclouded"));
+        if is_key_vcfg {
+            files.push(path);
+        }
+    }
+
+    files.sort();
+    Ok(files)
+}
+
+fn cs2_key_to_vcfg(key: &str) -> String {
+    let key = key.trim().to_lowercase();
+    match key.as_str() {
+        "space" => "SPACE".into(),
+        "tab" => "TAB".into(),
+        "enter" => "ENTER".into(),
+        "backspace" => "BACKSPACE".into(),
+        "delete" => "DEL".into(),
+        "escape" => "ESCAPE".into(),
+        "shift" => "SHIFT".into(),
+        "ctrl" => "CTRL".into(),
+        "alt" => "ALT".into(),
+        "uparrow" => "UPARROW".into(),
+        "downarrow" => "DOWNARROW".into(),
+        "leftarrow" => "LEFTARROW".into(),
+        "rightarrow" => "RIGHTARROW".into(),
+        "mouse1" => "MOUSE1".into(),
+        "mouse2" => "MOUSE2".into(),
+        "mouse3" => "MOUSE3".into(),
+        "mouse4" => "MOUSE4".into(),
+        "mouse5" => "MOUSE5".into(),
+        "mwheelup" => "MWHEELUP".into(),
+        "mwheeldown" => "MWHEELDOWN".into(),
+        _ if key.len() == 1 => key,
+        _ => key.to_ascii_uppercase(),
+    }
+}
+
+fn parse_vcfg_bindings(content: &str) -> BTreeMap<String, String> {
+    let mut bindings = BTreeMap::new();
+    let mut depth: i32 = 0;
+    let mut in_bindings = false;
+    let mut expect_bindings_block = false;
+    let mut bindings_depth = 0i32;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "{" {
+            depth += 1;
+            if expect_bindings_block {
+                in_bindings = true;
+                bindings_depth = depth;
+                expect_bindings_block = false;
+            }
+            continue;
+        }
+
+        if trimmed == "}" {
+            if in_bindings && depth <= bindings_depth {
+                in_bindings = false;
+            }
+            depth -= 1;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parts = vdf_strings(trimmed);
+        if parts.is_empty() {
+            continue;
+        }
+
+        if !in_bindings {
+            if parts.len() == 1 && parts[0] == "bindings" {
+                expect_bindings_block = true;
+            }
+        } else if depth == bindings_depth && parts.len() == 2 {
+            bindings.insert(parts[0].clone(), parts[1].clone());
+        }
+    }
+
+    bindings
+}
+
+fn has_vcfg_bindings_block(content: &str) -> bool {
+    let mut depth: i32 = 0;
+    let mut in_bindings = false;
+    let mut expect_bindings_block = false;
+    let mut bindings_depth = 0i32;
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        if trimmed == "{" {
+            depth += 1;
+            if expect_bindings_block {
+                in_bindings = true;
+                bindings_depth = depth;
+                expect_bindings_block = false;
+            }
+            continue;
+        }
+
+        if trimmed == "}" {
+            if in_bindings && depth <= bindings_depth {
+                return true;
+            }
+            depth -= 1;
+            continue;
+        }
+
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let parts = vdf_strings(trimmed);
+        if !in_bindings && parts.len() == 1 && parts[0] == "bindings" {
+            expect_bindings_block = true;
+        }
+    }
+
+    false
+}
+
+fn modify_vcfg_binding(content: &str, key: &str, value: Option<&str>) -> Result<String, String> {
+    #[derive(Clone)]
+    enum State {
+        Scanning,
+        BindingsNext,
+        InBindings(i32),
+    }
+
+    let mut state = State::Scanning;
+    let mut depth: i32 = 0;
+    let mut found = false;
+    let mut seen_bindings = false;
+    let mut out = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let mut skip_line = false;
+        let mut replaced_line = None::<String>;
+
+        if trimmed == "{" {
+            depth += 1;
+            if matches!(state, State::BindingsNext) {
+                state = State::InBindings(depth);
+                seen_bindings = true;
+            }
+        } else if trimmed == "}" {
+            if let State::InBindings(bindings_depth) = state.clone() {
+                if depth <= bindings_depth {
+                    if !found {
+                        if let Some(value) = value {
+                            let indent_len = line.len() - line.trim_start().len();
+                            let indent = &line[..indent_len];
+                            out.push(format!(
+                                "{}\t\"{}\"\t\t\"{}\"",
+                                indent,
+                                vdf_escape(key),
+                                vdf_escape(value)
+                            ));
+                        }
+                    }
+                    state = State::Scanning;
+                }
+            }
+            depth -= 1;
+        } else if !trimmed.is_empty() {
+            let parts = vdf_strings(trimmed);
+            if !parts.is_empty() {
+                state = match state.clone() {
+                    State::Scanning => {
+                        if parts.len() == 1 && parts[0] == "bindings" {
+                            State::BindingsNext
+                        } else {
+                            State::Scanning
+                        }
+                    }
+                    State::BindingsNext => State::Scanning,
+                    State::InBindings(bindings_depth) => {
+                        if depth == bindings_depth
+                            && parts.len() == 2
+                            && parts[0].eq_ignore_ascii_case(key)
+                        {
+                            found = true;
+                            if let Some(value) = value {
+                                let indent_len = line.len() - line.trim_start().len();
+                                let indent = &line[..indent_len];
+                                replaced_line = Some(format!(
+                                    "{}\"{}\"\t\t\"{}\"",
+                                    indent,
+                                    vdf_escape(&parts[0]),
+                                    vdf_escape(value)
+                                ));
+                            } else {
+                                skip_line = true;
+                            }
+                        }
+                        State::InBindings(bindings_depth)
+                    }
+                };
+            }
+        }
+
+        if let Some(line) = replaced_line {
+            out.push(line);
+        } else if !skip_line {
+            out.push(line.to_string());
+        }
+    }
+
+    if !seen_bindings {
+        return Err("vcfg 中未找到 bindings 块".into());
+    }
+
+    let mut result = out.join("\n");
+    if content.ends_with('\n') {
+        result.push('\n');
+    }
+    Ok(result)
+}
+
+fn sync_vcfg_bindings(
+    cfg_dir: &str,
+    userdata_cfg: &str,
+    prev_bindings: &BTreeMap<String, String>,
+    next_bindings: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let files = collect_vcfg_paths(userdata_cfg)?;
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    let mut backup = load_keybind_backup(cfg_dir)?;
+    let primary_content = fs::read_to_string(&files[0])
+        .map_err(|e| format!("读取 vcfg 失败: {}", e))?;
+    let primary_bindings = parse_vcfg_bindings(&primary_content);
+
+    for key in next_bindings.keys() {
+        if !prev_bindings.contains_key(key) {
+            let vcfg_key = cs2_key_to_vcfg(key);
+            let original = primary_bindings.get(&vcfg_key).cloned();
+            backup.original_binds.insert(key.clone(), original);
+        }
+    }
+
+    let released_keys: Vec<String> = prev_bindings
+        .keys()
+        .filter(|key| !next_bindings.contains_key(*key))
+        .cloned()
+        .collect();
+
+    for path in &files {
+        let mut content = fs::read_to_string(path)
+            .map_err(|e| format!("读取 vcfg 失败: {}", e))?;
+
+        if !has_vcfg_bindings_block(&content) {
+            continue;
+        }
+
+        for key in &released_keys {
+            let restore_value = backup
+                .original_binds
+                .get(key)
+                .and_then(|value| value.as_deref());
+            content = modify_vcfg_binding(&content, &cs2_key_to_vcfg(key), restore_value)?;
+        }
+
+        for (key, command) in next_bindings {
+            content = modify_vcfg_binding(&content, &cs2_key_to_vcfg(key), Some(command.as_str()))?;
+        }
+
+        fs::write(path, content).map_err(|e| format!("写入 vcfg 失败: {}", e))?;
+    }
+
+    for key in released_keys {
+        backup.original_binds.remove(&key);
+    }
+
+    save_keybind_backup(cfg_dir, &backup)
+}
+
+fn restore_vcfg_bindings(
+    cfg_dir: &str,
+    userdata_cfg: &str,
+    prev_bindings: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    let files = collect_vcfg_paths(userdata_cfg)?;
+    if files.is_empty() {
+        return Ok(());
+    }
+
+    let mut backup = load_keybind_backup(cfg_dir)?;
+
+    for path in &files {
+        let mut content = fs::read_to_string(path)
+            .map_err(|e| format!("读取 vcfg 失败: {}", e))?;
+
+        if !has_vcfg_bindings_block(&content) {
+            continue;
+        }
+
+        for key in prev_bindings.keys() {
+            let restore_value = backup
+                .original_binds
+                .get(key)
+                .and_then(|value| value.as_deref());
+            content = modify_vcfg_binding(&content, &cs2_key_to_vcfg(key), restore_value)?;
+        }
+
+        fs::write(path, content).map_err(|e| format!("写入 vcfg 失败: {}", e))?;
+    }
+
+    for key in prev_bindings.keys() {
+        backup.original_binds.remove(key);
+    }
+
+    save_keybind_backup(cfg_dir, &backup)
 }
 
 // ─── Launch options ───────────────────────────────────────────────────────────
@@ -588,7 +974,9 @@ fn is_steam_running() -> bool {
             .args(["/FI", "IMAGENAME eq Steam.exe", "/NH"])
             .output()
             .map(|o| {
-                String::from_utf8_lossy(&o.stdout).contains("Steam.exe")
+                String::from_utf8_lossy(&o.stdout)
+                    .to_ascii_lowercase()
+                    .contains("steam.exe")
             })
             .unwrap_or(false)
     }
@@ -598,10 +986,56 @@ fn is_steam_running() -> bool {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct KeyBindBackup {
+    original_binds: BTreeMap<String, Option<String>>,
+}
+
+#[tauri::command]
+pub fn steam_running_status() -> bool {
+    is_steam_running()
+}
+
+#[tauri::command]
+pub fn restart_steam() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        use std::thread;
+        use std::time::Duration;
+
+        let steam_path = find_steam_path()?;
+        let steam_exe = PathBuf::from(&steam_path).join("Steam.exe");
+        if !steam_exe.exists() {
+            return Err(format!("未找到 Steam.exe：{}", steam_exe.display()));
+        }
+
+        if is_steam_running() {
+            Command::new("taskkill")
+                .args(["/IM", "Steam.exe", "/F"])
+                .status()
+                .map_err(|e| format!("关闭 Steam 失败: {}", e))?;
+            thread::sleep(Duration::from_millis(1500));
+        }
+
+        Command::new(&steam_exe)
+            .spawn()
+            .map_err(|e| format!("启动 Steam 失败: {}", e))?;
+
+        thread::sleep(Duration::from_millis(1500));
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅 Windows 支持一键重启 Steam".into())
+    }
+}
+
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-pub fn read_settings(cfg_dir: String, userdata_cfg: Option<String>) -> Result<Settings, String> {
+pub fn read_settings(cfg_dir: String) -> Result<Settings, String> {
     let path = PathBuf::from(&cfg_dir).join("nullify/user/settings.cfg");
 
     let mut s = if path.exists() {
@@ -612,20 +1046,11 @@ pub fn read_settings(cfg_dir: String, userdata_cfg: Option<String>) -> Result<Se
         Settings::default()
     };
 
-    // Override sensitivity from the cloud-synced vcfg (source of truth)
-    if let Some(ref udir) = userdata_cfg {
-        let (sens, yaw, pitch) = read_vcfg_sensitivity(udir);
-        if let Some(v) = sens { s.sensitivity = v; }
-        if let Some(v) = yaw  { s.m_yaw = v; }
-        if let Some(v) = pitch { s.m_pitch = v; }
-    }
-
     // Read key bindings from keys.cfg
     let keys_path = PathBuf::from(&cfg_dir).join("nullify/user/keys.cfg");
     if let Ok(keys_content) = fs::read_to_string(&keys_path) {
-        let (bk, tk, jk, fjk, jbk) = parse_keys_cfg(&keys_content);
+        let (bk, jk, fjk, jbk) = parse_keys_cfg(&keys_content);
         if !bk.is_empty()  { s.bhop_key = bk; }
-        if !tk.is_empty()  { s.toggle_jiting_key = tk; }
         if !jk.is_empty()  { s.jump_throw_key = jk; }
         if !fjk.is_empty() { s.fwd_jump_throw_key = fjk; }
         if !jbk.is_empty() { s.jumpbug_key = jbk; }
@@ -652,13 +1077,7 @@ fn parse_settings(content: &str) -> Settings {
 
         let lower = line.to_lowercase();
 
-        if lower.starts_with("jt_mode_") {
-            s.jiting_mode = lower.clone();
-        }
-
         match lower.as_str() {
-            "open_jiting" => s.jiting = true,
-            "close_jiting" => s.jiting = false,
             "open_bhop" => s.bhop = true,
             "close_bhop" => s.bhop = false,
             "open_jumpbug" => s.jumpbug = true,
@@ -669,38 +1088,9 @@ fn parse_settings(content: &str) -> Settings {
             "close_fwd_jump_throw" => s.fwd_jump_throw = false,
             _ => {}
         }
-
-        if let Some(v) = extract_alias_cvar(line, "usr_sensitivity", "sensitivity") {
-            s.sensitivity = v;
-        }
-        if let Some(v) = extract_alias_cvar(line, "usr_m_yaw", "m_yaw") {
-            s.m_yaw = v;
-        }
-        if let Some(v) = extract_alias_cvar(line, "usr_m_pitch", "m_pitch") {
-            s.m_pitch = v;
-        }
     }
 
     s
-}
-
-fn extract_alias_cvar(line: &str, alias_name: &str, cvar_name: &str) -> Option<f32> {
-    let lower = line.to_lowercase();
-    let prefix = format!("alias {}", alias_name.to_lowercase());
-    if !lower.starts_with(&prefix) {
-        return None;
-    }
-    let open = line.find('"')?;
-    let close = line.rfind('"')?;
-    if close <= open {
-        return None;
-    }
-    let quoted = &line[open + 1..close];
-    let cvar_prefix = format!("{} ", cvar_name.to_lowercase());
-    if !quoted.to_lowercase().starts_with(&cvar_prefix) {
-        return None;
-    }
-    quoted[cvar_prefix.len()..].trim().parse::<f32>().ok()
 }
 
 #[tauri::command]
@@ -713,15 +1103,21 @@ pub fn write_settings(
     fs::create_dir_all(&dir)
         .map_err(|e| format!("创建目录失败: {}", e))?;
 
+    let previous_bindings = fs::read_to_string(dir.join("keys.cfg"))
+        .ok()
+        .map(|content| parse_feature_bindings(&content))
+        .unwrap_or_default();
+
+    let next_bindings = settings_feature_bindings(&settings);
+
+    if let Some(ref userdata_cfg) = userdata_cfg {
+        sync_vcfg_bindings(&cfg_dir, userdata_cfg, &previous_bindings, &next_bindings)?;
+    }
+
     let path = dir.join("settings.cfg");
     let content = render_settings(&settings);
     fs::write(&path, content)
         .map_err(|e| format!("写入 settings.cfg 失败: {}", e))?;
-
-    // Sync sensitivity back to the cloud-synced vcfg (keep in sync with CS2)
-    if let Some(ref udir) = userdata_cfg {
-        let _ = write_vcfg_sensitivity(udir, settings.sensitivity, settings.m_yaw, settings.m_pitch);
-    }
 
     // Write key bindings to keys.cfg
     let keys_path = dir.join("keys.cfg");
@@ -735,64 +1131,34 @@ pub fn write_settings(
 }
 
 fn render_settings(s: &Settings) -> String {
-    let spin_yaw = if s.sensitivity > 0.0 && s.m_yaw > 0.0 {
-        180.0 / (s.sensitivity * s.m_yaw)
-    } else {
-        0.0
-    };
-
     format!(
         "// ============================================================\n\
          // user/settings.cfg — generated by the UI, do not edit manually\n\
          // ============================================================\n\
          \n\
          // --- Counter-strafe ---\n\
-         {jiting}\n\
-         {jiting_mode}\n\
+         close_jiting\n\
          \n\
          // --- Features ---\n\
-        {bhop}\n\
+         {bhop}\n\
         {jumpbug}\n\
         {jump_throw}\n\
         {fwd_jump_throw}\n\
-         \n\
-         // --- Sensitivity ---\n\
-         alias usr_sensitivity        \"sensitivity {sensitivity}\"\n\
-         alias usr_m_yaw              \"m_yaw {m_yaw}\"\n\
-         alias usr_m_pitch            \"m_pitch {m_pitch}\"\n\
-         alias usr_sensitivity_y      \"sensitivity_y_scale 1\"\n\
-         alias usr_spin_yaw           \"yaw {spin_yaw} 1 1\"   // 180° = 180 / (sens * m_yaw)\n\
-         \n\
-         // Apply sensitivity\n\
-         usr_sensitivity\n\
-         usr_m_yaw\n\
-         usr_m_pitch\n\
-         usr_sensitivity_y\n\
-         \n\
-         // --- HUD color feedback ---\n\
-         alias hud_jiting_on  \"cl_hud_color 1\"\n\
-         alias hud_jiting_off \"cl_hud_color 4\"\n",
-        jiting = if s.jiting { "open_jiting" } else { "close_jiting" },
-        jiting_mode = s.jiting_mode,
+         \n",
         // Feature enable semantics: "bound key exists" => enabled; empty key => disabled.
         bhop = if !s.bhop_key.trim().is_empty() { "open_bhop" } else { "close_bhop" },
         jumpbug = if !s.jumpbug_key.trim().is_empty() { "open_jumpbug" } else { "close_jumpbug" },
         jump_throw = if !s.jump_throw_key.trim().is_empty() { "open_jump_throw" } else { "close_jump_throw" },
         fwd_jump_throw = if !s.fwd_jump_throw_key.trim().is_empty() { "open_fwd_jump_throw" } else { "close_fwd_jump_throw" },
-        sensitivity = s.sensitivity,
-        m_yaw = s.m_yaw,
-        m_pitch = s.m_pitch,
-        spin_yaw = spin_yaw,
     )
 }
 
 // ─── Keys CFG ─────────────────────────────────────────────────────────────────
 
 /// Extract the configurable key bindings from keys.cfg.
-/// Returns (bhop_key, toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key).
-fn parse_keys_cfg(content: &str) -> (String, String, String, String, String) {
+/// Returns (bhop_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key).
+fn parse_keys_cfg(content: &str) -> (String, String, String, String) {
     let mut bhop_key = String::new();
-    let mut toggle_jiting_key = String::new();
     let mut jump_throw_key = String::new();
     let mut fwd_jump_throw_key = String::new();
     let mut jumpbug_key = String::new();
@@ -820,7 +1186,6 @@ fn parse_keys_cfg(content: &str) -> (String, String, String, String, String) {
 
         match cmd {
             "+if_jump"           => bhop_key = key.to_lowercase(),
-            "toggle_jiting"      => toggle_jiting_key = key.to_lowercase(),
             "+if_jump_throw"     => jump_throw_key = key.to_lowercase(),
             "+if_fwd_jump_throw" => fwd_jump_throw_key = key.to_lowercase(),
             "+if_jumpbug"        => jumpbug_key = key.to_lowercase(),
@@ -828,18 +1193,81 @@ fn parse_keys_cfg(content: &str) -> (String, String, String, String, String) {
         }
     }
 
-    (bhop_key, toggle_jiting_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key)
+    (bhop_key, jump_throw_key, fwd_jump_throw_key, jumpbug_key)
+}
+
+fn parse_feature_bindings(content: &str) -> BTreeMap<String, String> {
+    let mut bindings = BTreeMap::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        let trimmed = if let Some(idx) = trimmed.find("//") {
+            trimmed[..idx].trim()
+        } else {
+            trimmed
+        };
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let lower = trimmed.to_lowercase();
+        if !lower.starts_with("bind ") {
+            continue;
+        }
+        let rest = trimmed["bind ".len()..].trim();
+        let (key, cmd_part) = match rest.split_once(|c: char| c.is_whitespace()) {
+            Some(pair) => pair,
+            None => continue,
+        };
+        let cmd_part = cmd_part.trim();
+        let cmd = if cmd_part.starts_with('"') && cmd_part.ends_with('"') && cmd_part.len() >= 2 {
+            &cmd_part[1..cmd_part.len() - 1]
+        } else {
+            cmd_part
+        };
+
+        match cmd {
+            "+if_jump" | "+if_jump_throw" | "+if_fwd_jump_throw" | "+if_jumpbug" => {
+                bindings.insert(key.to_lowercase(), cmd.to_string());
+            }
+            _ => {}
+        }
+    }
+
+    bindings
+}
+
+fn settings_feature_bindings(s: &Settings) -> BTreeMap<String, String> {
+    let mut bindings = BTreeMap::new();
+
+    if !s.bhop_key.trim().is_empty() {
+        bindings.insert(s.bhop_key.trim().to_lowercase(), "+if_jump".to_string());
+    }
+    if !s.jump_throw_key.trim().is_empty() {
+        bindings.insert(
+            s.jump_throw_key.trim().to_lowercase(),
+            "+if_jump_throw".to_string(),
+        );
+    }
+    if !s.fwd_jump_throw_key.trim().is_empty() {
+        bindings.insert(
+            s.fwd_jump_throw_key.trim().to_lowercase(),
+            "+if_fwd_jump_throw".to_string(),
+        );
+    }
+    if !s.jumpbug_key.trim().is_empty() {
+        bindings.insert(
+            s.jumpbug_key.trim().to_lowercase(),
+            "+if_jumpbug".to_string(),
+        );
+    }
+
+    bindings
 }
 
 fn render_keys_cfg(s: &Settings) -> String {
     let bhop_bind = if !s.bhop_key.trim().is_empty() {
         format!("bind {} \"+if_jump\"\n", s.bhop_key)
-    } else {
-        String::new()
-    };
-
-    let toggle_jiting_bind = if !s.toggle_jiting_key.trim().is_empty() {
-        format!("bind {} \"toggle_jiting\"\n", s.toggle_jiting_key)
     } else {
         String::new()
     };
@@ -867,117 +1295,16 @@ fn render_keys_cfg(s: &Settings) -> String {
          // user/keys.cfg — key bindings, generated by the UI\n\
          // ============================================================\n\
          \n\
-         // --- Movement ---\n\
-         bind w \"+fwd_key\"\n\
-         bind s \"+back_key\"\n\
-         bind a \"+left_key\"\n\
-         bind d \"+right_key\"\n\
-         {bhop_bind}\
-         bind shift \"+sprint\"\n\
-         bind ctrl  \"+duck\"\n\
-         \n\
-         // --- Weapon slots (with detection) ---\n\
-         bind 1 \"slot1;on_slot_1\"\n\
-         bind 2 \"slot2;on_slot_2\"\n\
-         bind 3 \"slot3;on_slot_3\"\n\
-         bind 4 \"slot4;on_slot_4\"\n\
-         bind 5 \"slot5;on_slot_5\"\n\
-         bind e \"+use;on_slot_any\"\n\
-         bind g \"drop;on_slot_any\"\n\
-         bind q \"lastinv;on_slot_any\"\n\
-         \n\
-         // --- Combat ---\n\
-         bind mouse1 \"+attack\"\n\
-         bind mouse2 \"+attack2\"\n\
-         \n\
          // --- Utility ---\n\
-         {toggle_jiting_bind}\
+         {bhop_bind}\
          {jump_throw_bind}\
          {fwd_jump_throw_bind}\
          {jumpbug_bind}",
         bhop_bind = bhop_bind,
-        toggle_jiting_bind = toggle_jiting_bind,
         jump_throw_bind = jump_throw_bind,
         fwd_jump_throw_bind = fwd_jump_throw_bind,
         jumpbug_bind = jumpbug_bind,
     )
-}
-
-// ─── VCFG (CS2 cloud-synced user config) ──────────────────────────────────────
-
-const VCFG_CONVARS: &str = "cs2_user_convars_0_slot0.vcfg";
-
-/// Read sensitivity/m_yaw/m_pitch from CS2's cloud-synced convar file.
-fn read_vcfg_sensitivity(userdata_cfg: &str) -> (Option<f32>, Option<f32>, Option<f32>) {
-    let path = PathBuf::from(userdata_cfg).join(VCFG_CONVARS);
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return (None, None, None),
-    };
-
-    let mut sensitivity = None;
-    let mut m_yaw = None;
-    let mut m_pitch = None;
-
-    for line in content.lines() {
-        let parts = vdf_strings(line.trim());
-        if parts.len() == 2 {
-            match parts[0].as_str() {
-                "sensitivity" => sensitivity = parts[1].parse::<f32>().ok(),
-                "m_yaw"       => m_yaw       = parts[1].parse::<f32>().ok(),
-                "m_pitch"     => m_pitch      = parts[1].parse::<f32>().ok(),
-                _ => {}
-            }
-        }
-    }
-
-    (sensitivity, m_yaw, m_pitch)
-}
-
-/// Write sensitivity/m_yaw/m_pitch to CS2's cloud-synced convar file in-place.
-fn write_vcfg_sensitivity(userdata_cfg: &str, sensitivity: f32, m_yaw: f32, m_pitch: f32) -> Result<(), String> {
-    let path = PathBuf::from(userdata_cfg).join(VCFG_CONVARS);
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("读取 vcfg 失败: {}", e))?;
-
-    let updates: &[(&str, String)] = &[
-        ("sensitivity", format!("{:.6}", sensitivity)),
-        ("m_yaw",       format!("{:.6}", m_yaw)),
-        ("m_pitch",     format!("{:.6}", m_pitch)),
-    ];
-    let new_content = patch_vcfg_values(&content, updates);
-
-    fs::write(&path, new_content)
-        .map_err(|e| format!("写入 vcfg 失败: {}", e))?;
-
-    Ok(())
-}
-
-/// Replace quoted values in-place for the given keys, preserving all other content.
-fn patch_vcfg_values(content: &str, updates: &[(&str, String)]) -> String {
-    let mut lines_out: Vec<String> = Vec::with_capacity(content.lines().count());
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        let parts = vdf_strings(trimmed);
-
-        if parts.len() == 2 {
-            if let Some((_, new_val)) = updates.iter().find(|(k, _)| *k == parts[0].as_str()) {
-                let indent_len = line.len() - line.trim_start().len();
-                let indent = &line[..indent_len];
-                lines_out.push(format!("{}\"{}\"\t\t\"{}\"", indent, parts[0], new_val));
-                continue;
-            }
-        }
-
-        lines_out.push(line.to_string());
-    }
-
-    let mut result = lines_out.join("\n");
-    if content.ends_with('\n') {
-        result.push('\n');
-    }
-    result
 }
 
 /// Escape a string value for embedding inside VDF double-quotes.

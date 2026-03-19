@@ -2,8 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useLocale, useUsers } from "../App";
 import type { Settings } from "../types";
-import { DEFAULT_SETTINGS, JITING_MODES, MODE_DESC_KEYS } from "../types";
-import type { TKey } from "../i18n";
+import { DEFAULT_SETTINGS } from "../types";
 
 export default function Configure() {
   const { t } = useLocale();
@@ -29,6 +28,7 @@ export default function Configure() {
       { key: "a", label: "A(左)" },
       { key: "s", label: "S(后退)" },
       { key: "d", label: "D(右)" },
+      { key: "b", label: "B(购买菜单)" },
       { key: "shift", label: "Shift(冲刺)" },
       { key: "ctrl", label: "Ctrl(蹲下)" },
       { key: "e", label: "E(使用)" },
@@ -45,7 +45,6 @@ export default function Configure() {
 
     const featureKeys: Array<{ key: string; label: string; enabled: boolean }> = [
       { key: s.bhop_key, label: "连跳(Bhop)", enabled: normalizeKey(s.bhop_key) !== "" },
-      { key: s.toggle_jiting_key, label: "急停开关", enabled: normalizeKey(s.toggle_jiting_key) !== "" },
       { key: s.jump_throw_key, label: "跳投(Jump Throw)", enabled: normalizeKey(s.jump_throw_key) !== "" },
       { key: s.fwd_jump_throw_key, label: "前跳投(Jump Throw Forward)", enabled: normalizeKey(s.fwd_jump_throw_key) !== "" },
       { key: s.jumpbug_key, label: "大跳(Jumpbug)", enabled: normalizeKey(s.jumpbug_key) !== "" },
@@ -88,11 +87,11 @@ export default function Configure() {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current);
 
     setLoading(true);
-    invoke<Settings>("read_settings", { cfgDir: gameCfg, userdataCfg })
+    invoke<Settings>("read_settings", { cfgDir: gameCfg })
       .then((s) => setSettings(s))
       .catch(() => setSettings(DEFAULT_SETTINGS))
       .finally(() => setLoading(false));
-  }, [gameCfg, userdataCfg]);
+  }, [gameCfg]);
 
   async function saveSettings() {
     if (!gameCfg) return;
@@ -167,53 +166,8 @@ export default function Configure() {
     );
   }
 
-  const modeDescKey = MODE_DESC_KEYS[settings.jiting_mode] as TKey | undefined;
-
   return (
     <div className="h-full overflow-y-auto px-6 py-4 space-y-3">
-      {/* Counter-strafe */}
-      <div className="section-card space-y-3">
-        <SectionTitle>{t("counter_strafe_title")}</SectionTitle>
-
-        <ToggleRow
-          label={t("cs_enable")}
-          checked={settings.jiting}
-          onChange={(v) => set("jiting", v)}
-        />
-
-        {settings.jiting && (
-          <div className="space-y-2">
-            <div className="text-xs text-cs-muted">{t("cs_mode")}</div>
-            <div className="flex flex-wrap gap-1.5">
-              {JITING_MODES.map((m) => (
-                <button
-                  key={m.value}
-                  onClick={() => set("jiting_mode", m.value)}
-                  className={`pill-btn ${
-                    settings.jiting_mode === m.value
-                      ? "bg-cs-accent text-[#0f1117]"
-                      : "bg-cs-bg border border-cs-border text-cs-muted hover:text-cs-text"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              ))}
-            </div>
-            {modeDescKey && (
-              <div className="text-xs text-cs-muted">{t(modeDescKey)}</div>
-            )}
-          </div>
-        )}
-
-        <div className="flex items-center justify-between gap-4">
-          <div className="text-sm text-cs-text">{t("key_toggle_jiting")}</div>
-          <KeyCapture
-            value={settings.toggle_jiting_key}
-            onChange={(v) => set("toggle_jiting_key", v)}
-          />
-        </div>
-      </div>
-
       {/* Features */}
       <div className="section-card space-y-2.5">
         <SectionTitle>{t("features_title")}</SectionTitle>
@@ -252,38 +206,6 @@ export default function Configure() {
           value={settings.fwd_jump_throw_key}
           onKeyChange={(v) => set("fwd_jump_throw_key", v)}
         />
-      </div>
-
-      {/* Sensitivity */}
-      <div className="section-card space-y-3">
-        <SectionTitle>{t("sens_title")}</SectionTitle>
-
-        <div className="grid grid-cols-3 gap-3">
-          <NumberInput
-            label="sensitivity"
-            value={settings.sensitivity}
-            onChange={(v) => set("sensitivity", v)}
-            step={0.1}
-            min={0.1}
-            max={20}
-          />
-          <NumberInput
-            label="m_yaw"
-            value={settings.m_yaw}
-            onChange={(v) => set("m_yaw", v)}
-            step={0.001}
-            min={0.001}
-            max={1}
-          />
-          <NumberInput
-            label="m_pitch"
-            value={settings.m_pitch}
-            onChange={(v) => set("m_pitch", v)}
-            step={0.001}
-            min={0.001}
-            max={1}
-          />
-        </div>
       </div>
 
       {/* Apply */}
@@ -336,44 +258,6 @@ function KeyBindRow({
   );
 }
 
-function ToggleRow({
-  label,
-  desc,
-  checked,
-  onChange,
-  keyValue,
-  onKeyChange,
-}: {
-  label: string;
-  desc?: string;
-  checked: boolean;
-  onChange: (v: boolean) => void;
-  keyValue?: string;
-  onKeyChange?: (v: string) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-4">
-      <div className="min-w-0">
-        <div className="text-sm text-cs-text">{label}</div>
-        {desc && <div className="text-xs text-cs-muted truncate">{desc}</div>}
-      </div>
-      <div className="flex items-center gap-2 shrink-0">
-        {keyValue !== undefined && onKeyChange && (
-          <KeyCapture value={keyValue} onChange={onKeyChange} />
-        )}
-        <button
-          role="switch"
-          aria-checked={checked}
-          onClick={() => onChange(!checked)}
-          className={`toggle-track ${checked ? "bg-cs-accent" : "bg-cs-border"}`}
-        >
-          <span className={`toggle-thumb ${checked ? "translate-x-4" : "translate-x-0"}`} />
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function browserKeyToCS2(e: KeyboardEvent): string | null {
   if (e.key === "Escape") return null;
   if (e.key === " ") return "space";
@@ -414,6 +298,8 @@ function KeyCapture({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const { locale } = useLocale();
+  const unbound = locale === "zh" ? "未绑定" : "unbound";
   const [listening, setListening] = useState(false);
   const startTimeRef = useRef(0);
 
@@ -453,7 +339,7 @@ function KeyCapture({
 
   return (
     <button
-      className={`w-14 h-7 rounded border text-xs font-mono uppercase transition-colors ${
+      className={`min-w-14 h-7 px-2 rounded border text-xs font-mono uppercase transition-colors ${
         listening
           ? "border-cs-accent text-cs-accent bg-cs-accent/10 animate-pulse"
           : "border-cs-border text-cs-muted bg-cs-bg hover:border-cs-muted hover:text-cs-text"
@@ -461,41 +347,7 @@ function KeyCapture({
       onClick={() => setListening(true)}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {listening ? "···" : value || "—"}
+      {listening ? "···" : value || unbound}
     </button>
-  );
-}
-
-function NumberInput({
-  label,
-  value,
-  onChange,
-  step,
-  min,
-  max,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  step: number;
-  min: number;
-  max: number;
-}) {
-  return (
-    <div className="space-y-1">
-      <div className="text-xs text-cs-muted font-mono">{label}</div>
-      <input
-        type="number"
-        className="input-field"
-        value={value}
-        step={step}
-        min={min}
-        max={max}
-        onChange={(e) => {
-          const v = parseFloat(e.target.value);
-          if (!isNaN(v)) onChange(v);
-        }}
-      />
-    </div>
   );
 }

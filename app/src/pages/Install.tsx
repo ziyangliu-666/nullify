@@ -3,7 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { useLocale, useUsers } from "../App";
 import type { SteamUser } from "../types";
 
-const LAUNCH_OPTION = `+exec nullify/setup -testscript "../../csgo/cfg/nullify/.vtest"`;
+const FALLBACK_LAUNCH_OPTION =
+  `+exec nullify/setup -testscript "../../csgo/cfg/nullify/.vtest"`;
 
 // Avatar color palette — pick by account_id hash
 const AVATAR_COLORS = [
@@ -53,7 +54,7 @@ function Avatar({
 
 type LaunchStatus = "unknown" | "ok" | "missing" | "different";
 
-function useLaunchStatus(user: SteamUser | null) {
+function useLaunchStatus(user: SteamUser | null, launchOption: string) {
   const [status, setStatus] = useState<LaunchStatus>("unknown");
   const [currentValue, setCurrentValue] = useState<string>("");
 
@@ -67,12 +68,12 @@ function useLaunchStatus(user: SteamUser | null) {
     })
       .then((val) => {
         setCurrentValue(val);
-        if (val === LAUNCH_OPTION) setStatus("ok");
+        if (val === launchOption) setStatus("ok");
         else if (!val.trim()) setStatus("missing");
         else setStatus("different");
       })
       .catch(() => setStatus("unknown"));
-  }, [user?.localconfig_path]);
+  }, [user?.localconfig_path, launchOption]);
 
   return { status, currentValue, setStatus };
 }
@@ -84,6 +85,7 @@ export default function Install() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [installed, setInstalled] = useState(false);
   const [installing, setInstalling] = useState(false);
+  const [uninstalling, setUninstalling] = useState(false);
   const [installMsg, setInstallMsg] = useState<{
     ok: boolean;
     text: string;
@@ -93,10 +95,50 @@ export default function Install() {
   const [writeMsg, setWriteMsg] = useState<{ ok: boolean; text: string } | null>(
     null
   );
+  const [pendingSteamRestart, setPendingSteamRestart] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [launchOption, setLaunchOption] = useState(FALLBACK_LAUNCH_OPTION);
 
   const { status: launchStatus, setStatus: setLaunchStatus } =
-    useLaunchStatus(selectedUser);
+    useLaunchStatus(selectedUser, launchOption);
+
+  useEffect(() => {
+    invoke<string>("nullify_launch_option")
+      .then(setLaunchOption)
+      .catch(() => setLaunchOption(FALLBACK_LAUNCH_OPTION));
+  }, []);
+
+  useEffect(() => {
+    if (!pendingSteamRestart) return;
+
+    let cancelled = false;
+
+    async function checkSteam() {
+      try {
+        const running = await invoke<boolean>("steam_running_status");
+        if (!cancelled && !running) {
+          setPendingSteamRestart(false);
+          setWriteMsg(null);
+        }
+      } catch {
+        // Ignore transient checks; keep the message until a successful check clears it.
+      }
+    }
+
+    void checkSteam();
+    const intervalId = window.setInterval(() => {
+      void checkSteam();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [pendingSteamRestart]);
+
+  useEffect(() => {
+    setPendingSteamRestart(false);
+  }, [selectedUser?.account_id]);
 
   // Load users on mount
   useEffect(() => {
@@ -132,6 +174,27 @@ export default function Install() {
     }
   }
 
+  async function handleUninstall() {
+    if (!selectedUser) return;
+    setUninstalling(true);
+    setInstallMsg(null);
+    try {
+      await invoke("uninstall_cfg", {
+        gameCfgDir: selectedUser.game_cfg,
+        userdataCfg: selectedUser.userdata_cfg,
+      });
+      const ok = await invoke<boolean>("install_status", {
+        gameCfgDir: selectedUser.game_cfg,
+      });
+      setInstalled(ok);
+      setInstallMsg({ ok: true, text: t("uninstall_ok") });
+    } catch (e: unknown) {
+      setInstallMsg({ ok: false, text: String(e) });
+    } finally {
+      setUninstalling(false);
+    }
+  }
+
   async function handleWriteLaunchOption() {
     if (!selectedUser?.localconfig_path) return;
     setWriting(true);
@@ -139,14 +202,16 @@ export default function Install() {
     try {
       const needsRestart = await invoke<boolean>("set_launch_options", {
         localconfigPath: selectedUser.localconfig_path,
-        value: LAUNCH_OPTION,
+        value: launchOption,
       });
       setLaunchStatus("ok");
+      setPendingSteamRestart(needsRestart);
       setWriteMsg({
         ok: true,
         text: needsRestart ? t("write_need_restart") : t("write_ok_no_restart"),
       });
     } catch (e: unknown) {
+      setPendingSteamRestart(false);
       setWriteMsg({ ok: false, text: String(e) });
     } finally {
       setWriting(false);
@@ -154,7 +219,7 @@ export default function Install() {
   }
 
   async function handleCopy() {
-    await navigator.clipboard.writeText(LAUNCH_OPTION);
+    await navigator.clipboard.writeText(launchOption);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -214,7 +279,7 @@ export default function Install() {
           <div className="flex items-center gap-3 pt-1">
             <button
               className="btn-primary"
-              disabled={installing}
+              disabled={installing || uninstalling}
               onClick={handleInstall}
             >
               {installing
@@ -223,6 +288,15 @@ export default function Install() {
                 ? t("reinstall_btn")
                 : t("install_btn")}
             </button>
+            {installed && (
+              <button
+                className="btn-ghost"
+                disabled={installing || uninstalling}
+                onClick={handleUninstall}
+              >
+                {uninstalling ? t("uninstalling_btn") : t("uninstall_btn")}
+              </button>
+            )}
             {installMsg && (
               <span
                 className={`text-sm ${
@@ -249,7 +323,7 @@ export default function Install() {
 
           <div className="flex items-center gap-2">
             <code className="flex-1 bg-cs-bg border border-cs-border rounded px-3 py-2 text-xs text-cs-text font-mono break-all select-text">
-              {LAUNCH_OPTION}
+              {launchOption}
             </code>
             <button className="btn-ghost shrink-0" onClick={handleCopy}>
               {copied ? t("copied_btn") : t("copy_btn")}
@@ -375,15 +449,22 @@ function UserCard({
 }) {
   const { t } = useLocale();
   const [launchOk, setLaunchOk] = useState<boolean | null>(null);
+  const [launchOption, setLaunchOption] = useState(FALLBACK_LAUNCH_OPTION);
+
+  useEffect(() => {
+    invoke<string>("nullify_launch_option")
+      .then(setLaunchOption)
+      .catch(() => setLaunchOption(FALLBACK_LAUNCH_OPTION));
+  }, []);
 
   useEffect(() => {
     if (!user.localconfig_path) return;
     invoke<string>("get_launch_options", {
       localconfigPath: user.localconfig_path,
     })
-      .then((val) => setLaunchOk(val === LAUNCH_OPTION))
+      .then((val) => setLaunchOk(val === launchOption))
       .catch(() => setLaunchOk(null));
-  }, [user.localconfig_path]);
+  }, [launchOption, user.localconfig_path]);
 
   return (
     <button

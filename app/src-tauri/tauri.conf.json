@@ -29,7 +29,10 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
     "resources": {
       "../../cfg/**/*": "cfg/",
       "../../cfg/.vtest": "cfg/.vtest"
