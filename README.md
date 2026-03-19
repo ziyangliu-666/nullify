@@ -58,3 +58,7 @@ The packaged desktop output is produced by Tauri under the build artifacts gener
 - `cfg/`: generated and bundled CFG files
 - `tools/`: helper generation scripts
 - `docs/`: README assets
+
+## License
+
+MIT
