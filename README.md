@@ -1,38 +1,60 @@
-# ForeverRise-rebuild
+# nullify
 
-一个基于 Tauri + React 的 CS2 CFG 安装器项目，当前应用名为 `nullify`。
+![nullify preview](./docs/app-preview.png)
 
-## 功能
+`nullify` is a Windows desktop installer for CS2 CFG setup, built with Tauri, React, TypeScript, and Tailwind CSS.
 
-- 检测本机 Steam 账号
-- 安装 / 卸载 CFG 文件
-- 引导设置 Steam 或第三方平台启动项
-- 配置连跳、跳投、大跳等功能键位
+It helps users detect local Steam accounts, install the bundled CFG set, configure launch options for Steam or third-party platforms, and manage feature keybinds from a simple desktop UI.
 
-## 开发环境
+## Overview
+
+`nullify` is designed as a guided installer instead of a raw config pack. The app walks the user through:
+
+- detecting available Steam accounts
+- installing or uninstalling the bundled CFG files
+- applying the correct launch flow for Steam or third-party platforms
+- configuring bhop, jump throw, jumpbug, and related binds
+- closing the setup once everything is ready
+
+## Features
+
+- Detect local Steam accounts
+- Install or uninstall CFG files
+- Guide launch option setup for Steam and third-party platforms
+- Configure bhop, jump throw, jumpbug, and related keybinds
+
+## Requirements
 
 - Windows
 - Node.js
 - Rust / Cargo
 
-## 本地开发
+## Quick Start
 
 ```bash
 cd app
 npm install
+```
+
+## Development
+
+```bash
+cd app
 npm run tauri dev
 ```
 
-## 构建
+## Build
 
 ```bash
 cd app
-npm install
 npm run tauri build
 ```
 
-## 目录
+The packaged desktop output is produced by Tauri under the build artifacts generated from `app/src-tauri`.
 
-- `app/`: 前端与 Tauri 应用
-- `cfg/`: 生成并写入游戏目录的 CFG 文件
-- `tools/`: 辅助生成脚本
+## Project Layout
+
+- `app/`: frontend and Tauri application
+- `cfg/`: generated and bundled CFG files
+- `tools/`: helper generation scripts
+- `docs/`: README assets
