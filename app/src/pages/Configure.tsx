@@ -183,12 +183,6 @@ export default function Configure() {
         </div>
 
         <KeyBindRow
-          label={t("bhop")}
-          desc={t("bhop_desc")}
-          value={settings.bhop_key}
-          onKeyChange={(v) => set("bhop_key", v)}
-        />
-        <KeyBindRow
           label={t("jumpbug")}
           desc={t("jumpbug_desc")}
           value={settings.jumpbug_key}
@@ -206,6 +200,23 @@ export default function Configure() {
           value={settings.fwd_jump_throw_key}
           onKeyChange={(v) => set("fwd_jump_throw_key", v)}
         />
+      </div>
+
+      {/* Experimental */}
+      <div className="section-card space-y-2.5">
+        <SectionTitle>{t("experimental_title")}</SectionTitle>
+
+        <KeyBindRow
+          label={t("bhop")}
+          desc={t("bhop_desc")}
+          value={settings.bhop_key}
+          onKeyChange={(v) => set("bhop_key", v)}
+        />
+        {settings.bhop_key.trim() !== "" && (
+          <div className="text-[11px] text-cs-error">
+            {t("bhop_fps_warning")}
+          </div>
+        )}
       </div>
 
       {/* Apply */}

@@ -96,8 +96,10 @@ const zh = {
 
   // Configure — features
   features_title: "功能",
-  bhop: "连跳",
-  bhop_desc: "按下自动连跳；连跳键按下期间 FPS 锁定 64 帧",
+  experimental_title: "实验性",
+  bhop: "连跳（锁 64 帧）",
+  bhop_desc: "按下自动连跳",
+  bhop_fps_warning: "已绑定：进游戏后 FPS 将锁定为 64 帧以支持连跳",
   jumpbug: "大跳",
   jumpbug_desc: "按下自动蹲+跳",
   jump_throw: "跳投",
@@ -207,8 +209,10 @@ const en = {
   no_userdata: "No userdata",
 
   features_title: "Features",
-  bhop: "Bhop",
-  bhop_desc: "Press to auto bunny-hop; FPS is locked to 64 while the bhop key is held",
+  experimental_title: "Experimental",
+  bhop: "Bhop (locks to 64 FPS)",
+  bhop_desc: "Press to auto bunny-hop",
+  bhop_fps_warning: "Bound: FPS will be locked to 64 in-game to support bhop",
   jumpbug: "Jumpbug",
   jumpbug_desc: "Press to auto crouch + jump",
   jump_throw: "Jump Throw",
